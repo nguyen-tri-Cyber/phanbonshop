@@ -172,35 +172,35 @@ jobs:
 
       - name: Deploy Prisma Migrations (Test idempotency & schema against fresh MySQL 8)
         env:
-          DATABASE_URL_AUTH: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
-          DATABASE_URL_PRODUCT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
-          DATABASE_URL_ORDER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
-          DATABASE_URL_INVENTORY: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
-          DATABASE_URL_CUSTOMER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
-          DATABASE_URL_CONTENT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
+          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          PRODUCT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
+          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
+          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          CUSTOMER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
+          CONTENT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
         run: |
-          DATABASE_URL=$DATABASE_URL_AUTH npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_PRODUCT npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_ORDER npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_INVENTORY npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_CUSTOMER npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_CONTENT npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
 
       - name: Verify second migration deploy run is cleanly idempotent
         env:
-          DATABASE_URL_AUTH: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
-          DATABASE_URL_PRODUCT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
-          DATABASE_URL_ORDER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
-          DATABASE_URL_INVENTORY: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
-          DATABASE_URL_CUSTOMER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
-          DATABASE_URL_CONTENT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
+          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          PRODUCT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
+          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
+          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          CUSTOMER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
+          CONTENT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
         run: |
-          DATABASE_URL=$DATABASE_URL_AUTH npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_PRODUCT npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_ORDER npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_INVENTORY npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_CUSTOMER npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
-          DATABASE_URL=$DATABASE_URL_CONTENT npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
+          npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
 
   # ============================================================================
   # 5. Docker Build Test Job (Verify Dockerfiles & Compose)
