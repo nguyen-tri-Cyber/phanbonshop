@@ -144,16 +144,6 @@ jobs:
           --health-timeout=5s
           --health-retries=5
 
-      minio:
-        image: quay.io/minio/minio:latest
-        env:
-          MINIO_ROOT_USER: ci_minio_user
-          MINIO_ROOT_PASSWORD: ci_minio_password
-        ports:
-          - 9000:9000
-        options: >-
-          server /data
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
