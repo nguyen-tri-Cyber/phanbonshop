@@ -15,6 +15,8 @@ env:
   CI: true
   # Isolated test secrets (never use dev or prod credentials in CI)
   JWT_SECRET: ci_test_jwt_secret_token_must_have_at_least_32_characters
+  JWT_ACCESS_SECRET: ci_test_jwt_access_secret_must_have_at_least_32_characters
+  JWT_REFRESH_SECRET: ci_test_jwt_refresh_secret_must_have_at_least_32_characters
   INTERNAL_SERVICE_SECRET: ci_test_internal_service_secret_token_secure
   CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
   # Provide DB URLs so `prisma validate` can load all service schemas in non-DB jobs
@@ -224,6 +226,8 @@ jobs:
           MINIO_ROOT_USER: ci_minio_user
           MINIO_ROOT_PASSWORD: ci_minio_password
           JWT_SECRET: ci_test_jwt_secret_token_32_characters_long
+          JWT_ACCESS_SECRET: ci_test_jwt_secret_token_32_characters_long
+          JWT_REFRESH_SECRET: ci_test_jwt_refresh_secret_token_32_chars_long
           INTERNAL_SERVICE_SECRET: ci_test_internal_secret
           CORS_ALLOWED_ORIGINS: http://localhost:3000
         run: docker compose -f docker-compose.prod.yml config
