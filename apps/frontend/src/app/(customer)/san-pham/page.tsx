@@ -13,13 +13,13 @@ export const metadata: Metadata = {
   description:
     'Tra cứu và đặt mua phân bón NPK, phân hữu cơ vi sinh, phân bón lá chất lượng cao từ Bình Điền Đầu Trâu, Đạm Phú Mỹ, Cà Mau.',
   alternates: {
-    canonical: 'http://localhost:3000/san-pham',
+    canonical: '/san-pham',
   },
   openGraph: {
     title: 'Danh mục phân bón chính hãng | Phân Bón Shop',
     description:
       'Tra cứu và đặt mua phân bón NPK, phân hữu cơ vi sinh, phân bón lá chất lượng cao từ Bình Điền Đầu Trâu, Đạm Phú Mỹ, Cà Mau.',
-    url: 'http://localhost:3000/san-pham',
+    url: '/san-pham',
     type: 'website',
   },
 };

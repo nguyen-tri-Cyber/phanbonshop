@@ -10,14 +10,17 @@ import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RequestWithId } from '../common/middleware/request-id.middleware.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway:customer-proxy');
 
 @ApiTags('Customer (Proxy)')
 @Controller()
 export class CustomerProxyController {
-  private readonly customerServiceUrl =
-    process.env.CUSTOMER_SERVICE_URL || 'http://localhost:3005';
+  private readonly customerServiceUrl = getServiceUrl(
+    'CUSTOMER_SERVICE_URL',
+    CANONICAL_PORTS.CUSTOMER_SERVICE,
+  );
 
   @All(['api/v1/customers', 'api/v1/customers/*'])
   async handleCustomer(

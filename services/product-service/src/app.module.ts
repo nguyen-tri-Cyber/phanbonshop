@@ -1,3 +1,4 @@
+import { HealthController } from './health/health.controller.js';
 import { Module } from '@nestjs/common';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { MinioModule } from './minio/minio.module.js';
@@ -8,6 +9,7 @@ import { ProductModule } from './product/product.module.js';
 import { ReviewsModule } from './reviews/reviews.module.js';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     PrismaModule,
     MinioModule,

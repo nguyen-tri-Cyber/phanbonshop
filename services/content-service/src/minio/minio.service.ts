@@ -3,6 +3,7 @@ import * as Minio from 'minio';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString } from '@phanbonshop/config';
 
 const logger = createLogger('content-service:minio');
 
@@ -24,7 +25,10 @@ export interface UploadedFileDto {
 export class MinioService implements OnModuleInit {
   private client!: Minio.Client;
   public readonly bucketName = process.env.MINIO_BUCKET_CONTENT || 'content-images';
-  private readonly endPoint = process.env.MINIO_ENDPOINT || 'localhost';
+  private readonly endPoint = getEnvString(
+    'MINIO_ENDPOINT',
+    process.env.NODE_ENV === 'production' ? undefined : 'localhost',
+  );
   private readonly port = Number(process.env.MINIO_PORT) || 9000;
   private readonly useSSL = process.env.MINIO_USE_SSL === 'true';
 
@@ -34,7 +38,10 @@ export class MinioService implements OnModuleInit {
       port: this.port,
       useSSL: this.useSSL,
       accessKey: process.env.MINIO_ROOT_USER || 'admin',
-      secretKey: process.env.MINIO_ROOT_PASSWORD || 'admin123456',
+      secretKey: getEnvString(
+        'MINIO_ROOT_PASSWORD',
+        process.env.NODE_ENV === 'production' ? undefined : 'admin123456',
+      ),
     });
 
     try {

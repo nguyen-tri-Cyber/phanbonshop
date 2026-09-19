@@ -1,0 +1,63 @@
+# ==============================================================================
+# Multi-stage Dockerfile for Phan Bon Shop NestJS Backend Services & API Gateway
+# ==============================================================================
+
+# Stage 1: Build dependencies and compile TypeScript
+FROM node:20-alpine AS builder
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+
+ARG SERVICE_PATH
+ARG SERVICE_NAME
+
+# Copy root and all workspace package manifests
+COPY package.json package-lock.json ./
+COPY packages ./packages
+COPY apps/api-gateway/package.json ./apps/api-gateway/
+COPY apps/frontend/package.json ./apps/frontend/
+COPY services/auth-service/package.json ./services/auth-service/
+COPY services/product-service/package.json ./services/product-service/
+COPY services/order-service/package.json ./services/order-service/
+COPY services/inventory-service/package.json ./services/inventory-service/
+COPY services/customer-service/package.json ./services/customer-service/
+COPY services/content-service/package.json ./services/content-service/
+
+# Clean install dependencies (no host node_modules copied, bypass postinstall until schemas copied)
+RUN npm ci --ignore-scripts
+
+# Copy service source code
+COPY ${SERVICE_PATH} ./${SERVICE_PATH}
+
+# Build internal monorepo packages first
+RUN npm run build:packages
+
+# Generate Prisma Client if schema exists
+RUN if [ -f "${SERVICE_PATH}/prisma/schema.prisma" ]; then \
+      npx prisma generate --schema=${SERVICE_PATH}/prisma/schema.prisma; \
+    fi
+
+# Build target microservice
+RUN npm run build --workspace=@phanbonshop/${SERVICE_NAME}
+
+# Stage 2: Production Minimal Runner (Non-root)
+FROM node:20-alpine AS runner
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+
+ARG SERVICE_PATH
+ARG PORT=3000
+
+ENV NODE_ENV=production
+ENV PORT=${PORT}
+
+# Copy node_modules, compiled packages, and compiled service
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/packages ./packages
+COPY --from=builder --chown=node:node /app/${SERVICE_PATH} ./${SERVICE_PATH}
+
+USER node
+WORKDIR /app/${SERVICE_PATH}
+
+EXPOSE ${PORT}
+
+CMD ["node", "dist/main.js"]

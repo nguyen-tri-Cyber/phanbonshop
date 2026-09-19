@@ -14,13 +14,13 @@ export const metadata: Metadata = {
   description:
     'Chia sẻ kỹ thuật bón phân, cẩm nang chăm sóc cây trồng, thời điểm bón NPK và cách phòng trừ sâu bệnh đạt năng suất cao nhất.',
   alternates: {
-    canonical: 'http://localhost:3000/kien-thuc',
+    canonical: '/kien-thuc',
   },
   openGraph: {
     title: 'Kiến Thức Nông Nghiệp & Cẩm Nang Bón Phân | Phân Bón Shop',
     description:
       'Chia sẻ kỹ thuật bón phân, cẩm nang chăm sóc cây trồng, thời điểm bón NPK và cách phòng trừ sâu bệnh đạt năng suất cao nhất.',
-    url: 'http://localhost:3000/kien-thuc',
+    url: '/kien-thuc',
     type: 'website',
   },
 };

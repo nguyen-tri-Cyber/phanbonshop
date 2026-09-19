@@ -7,16 +7,17 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma, ReviewStatus } from '../../generated/client/index.js';
 import { CreateReviewDto } from './dto/review.dto.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString, getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('product-service:reviews');
 
 @Injectable()
 export class ReviewsService {
-  private readonly orderServiceUrl =
-    process.env.ORDER_SERVICE_URL || 'http://localhost:3003';
-  private readonly internalSecret =
-    process.env.INTERNAL_SERVICE_SECRET ||
-    'your_internal_service_mesh_shared_secret_2026';
+  private readonly orderServiceUrl = getServiceUrl(
+    'ORDER_SERVICE_URL',
+    CANONICAL_PORTS.ORDER_SERVICE,
+  );
+  private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
   constructor(private readonly prisma: PrismaService) {}
 

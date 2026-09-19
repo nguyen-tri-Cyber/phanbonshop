@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { getEnvString } from '@phanbonshop/config';
 
 export interface AuthenticatedUser {
   userId: string;
@@ -22,9 +23,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey:
-        process.env.JWT_ACCESS_SECRET ||
-        'your_jwt_access_secret_key_phanbonshop_32chars_min',
+      secretOrKey: getEnvString('JWT_ACCESS_SECRET'),
     });
   }
 

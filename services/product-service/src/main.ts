@@ -4,10 +4,18 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { createLogger } from '@phanbonshop/logger';
+import { validateStartupEnv, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('product-service');
 
 async function bootstrap(): Promise<void> {
+  // 0. Startup Environment Validation
+  validateStartupEnv('product-service', {
+    requiredVars: ['JWT_ACCESS_SECRET', 'INTERNAL_SERVICE_SECRET'],
+    requiredDatabaseUrl: 'PRODUCT_DATABASE_URL',
+    requiredServiceUrls: ['ORDER_SERVICE_URL'],
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
@@ -32,7 +40,7 @@ async function bootstrap(): Promise<void> {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  const port = Number(process.env.PRODUCT_SERVICE_PORT) || 3002;
+  const port = Number(process.env.PRODUCT_SERVICE_PORT) || CANONICAL_PORTS.PRODUCT_SERVICE;
   await app.listen(port, '0.0.0.0');
 
   logger.info(`Product Service đã khởi động thành công trên cổng ${port}`, {

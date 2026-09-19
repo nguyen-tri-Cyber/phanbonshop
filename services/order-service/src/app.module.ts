@@ -1,3 +1,4 @@
+import { HealthController } from './health/health.controller.js';
 import { Module } from '@nestjs/common';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './auth/auth.module.js';
@@ -7,8 +8,10 @@ import { CouponsModule } from './coupons/coupons.module.js';
 import { ShippingModule } from './shipping/shipping.module.js';
 import { CheckoutModule } from './checkout/checkout.module.js';
 import { PaymentsModule } from './payments/payments.module.js';
+import { CompensationModule } from './compensation/compensation.module.js';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     PrismaModule,
     AuthModule,
@@ -18,6 +21,7 @@ import { PaymentsModule } from './payments/payments.module.js';
     ShippingModule,
     CheckoutModule,
     PaymentsModule,
+    CompensationModule,
   ],
 })
 export class AppModule {}

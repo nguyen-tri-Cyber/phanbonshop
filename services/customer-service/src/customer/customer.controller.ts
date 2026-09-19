@@ -18,7 +18,6 @@ import {
 } from '@nestjs/swagger';
 import { CustomerService } from './customer.service.js';
 import {
-  SyncCustomerProfileDto,
   CreateAddressDto,
   UpdateProfileDto,
   UpdateAddressDto,
@@ -151,12 +150,5 @@ export class CustomerController {
     @Param('addressId') addressId: string,
   ): Promise<Address> {
     return this.customerService.setDefaultAddress(user.userId, addressId);
-  }
-
-  // Legacy sync endpoint
-  @Post('sync')
-  @ApiOperation({ summary: 'Đồng bộ hồ sơ từ auth-service' })
-  async syncProfile(@Body() dto: SyncCustomerProfileDto): Promise<CustomerProfile> {
-    return this.customerService.syncProfile(dto);
   }
 }

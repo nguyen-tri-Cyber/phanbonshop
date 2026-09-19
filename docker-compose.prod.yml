@@ -1,0 +1,474 @@
+services:
+  # ==========================================
+  # 1. Reverse Proxy (Public Entrypoint: Nginx)
+  # ==========================================
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: phanbonshop_proxy_prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks:
+      - public_network
+      - internal_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==========================================
+  # 2. Frontend Application (Next.js Standalone)
+  # ==========================================
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    container_name: phanbonshop_frontend_prod
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_GATEWAY_URL: /api
+      INTERNAL_GATEWAY_URL: http://gateway:8080
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok || r.status === 404 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ==========================================
+  # 3. API Gateway (NestJS)
+  # ==========================================
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: apps/api-gateway
+        SERVICE_NAME: api-gateway
+        PORT: 8080
+    container_name: phanbonshop_gateway_prod
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      AUTH_SERVICE_URL: http://auth:3001
+      PRODUCT_SERVICE_URL: http://product:3002
+      ORDER_SERVICE_URL: http://order:3003
+      INVENTORY_SERVICE_URL: http://inventory:3004
+      CUSTOMER_SERVICE_URL: http://customer:3005
+      CONTENT_SERVICE_URL: http://content:3006
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+    depends_on:
+      auth:
+        condition: service_healthy
+      product:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      customer:
+        condition: service_healthy
+      content:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 4. Auth Service (NestJS + Prisma)
+  # ==========================================
+  auth:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/auth-service
+        SERVICE_NAME: auth-service
+        PORT: 3001
+    container_name: phanbonshop_auth_prod
+    restart: unless-stopped
+    expose:
+      - "3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/auth_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 5. Product Service (NestJS + Prisma)
+  # ==========================================
+  product:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/product-service
+        SERVICE_NAME: product-service
+        PORT: 3002
+    container_name: phanbonshop_product_prod
+    restart: unless-stopped
+    expose:
+      - "3002"
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/product_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 6. Order Service (NestJS + Prisma)
+  # ==========================================
+  order:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/order-service
+        SERVICE_NAME: order-service
+        PORT: 3003
+    container_name: phanbonshop_order_prod
+    restart: unless-stopped
+    expose:
+      - "3003"
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/order_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      INVENTORY_SERVICE_URL: http://inventory:3004
+      CUSTOMER_SERVICE_URL: http://customer:3005
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      customer:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 7. Inventory Service (NestJS + Prisma)
+  # ==========================================
+  inventory:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/inventory-service
+        SERVICE_NAME: inventory-service
+        PORT: 3004
+    container_name: phanbonshop_inventory_prod
+    restart: unless-stopped
+    expose:
+      - "3004"
+    environment:
+      NODE_ENV: production
+      PORT: 3004
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/inventory_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 8. Customer Service (NestJS + Prisma)
+  # ==========================================
+  customer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/customer-service
+        SERVICE_NAME: customer-service
+        PORT: 3005
+    container_name: phanbonshop_customer_prod
+    restart: unless-stopped
+    expose:
+      - "3005"
+    environment:
+      NODE_ENV: production
+      PORT: 3005
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/customer_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 9. Content Service (NestJS + Prisma + MinIO)
+  # ==========================================
+  content:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/content-service
+        SERVICE_NAME: content-service
+        PORT: 3006
+    container_name: phanbonshop_content_prod
+    restart: unless-stopped
+    expose:
+      - "3006"
+    environment:
+      NODE_ENV: production
+      PORT: 3006
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/content_db
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      CORS_ORIGIN: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - internal_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3006/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 10. Database: MySQL 8.0 (Internal Only)
+  # ==========================================
+  mysql:
+    image: mysql:8.0
+    container_name: phanbonshop_mysql_prod
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-time-zone=+07:00
+    expose:
+      - "3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_USER: ${MYSQL_USER:-phanbon_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - mysql_prod_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - internal_network
+
+  # ==========================================
+  # 11. Cache & Locks: Redis 7 (Internal Only)
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: phanbonshop_redis_prod
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    expose:
+      - "6379"
+    volumes:
+      - redis_prod_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - internal_network
+
+  # ==========================================
+  # 12. Storage: MinIO (Internal Only)
+  # ==========================================
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: phanbonshop_minio_prod
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    expose:
+      - "9000"
+      - "9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_prod_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal_network
+
+  minio-init-buckets:
+    image: quay.io/minio/mc:latest
+    container_name: phanbonshop_minio_init_prod
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Chờ kết nối MinIO server...';
+      /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      echo 'Tạo bucket product-images...';
+      /usr/bin/mc mb --ignore-existing myminio/product-images;
+      echo 'Tạo bucket content-images...';
+      /usr/bin/mc mb --ignore-existing myminio/content-images;
+      echo 'Cấu hình quyền đọc công khai cho hình ảnh sản phẩm và bài viết...';
+      /usr/bin/mc anonymous set download myminio/product-images;
+      /usr/bin/mc anonymous set download myminio/content-images;
+      echo 'Khởi tạo bucket MinIO hoàn tất!';
+      exit 0;
+      "
+    networks:
+      - internal_network
+
+networks:
+  public_network:
+    name: phanbonshop_public_network
+    driver: bridge
+  internal_network:
+    name: phanbonshop_internal_network
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_prod_data:
+    name: phanbonshop_mysql_prod_data
+    driver: local
+  redis_prod_data:
+    name: phanbonshop_redis_prod_data
+    driver: local
+  minio_prod_data:
+    name: phanbonshop_minio_prod_data
+    driver: local

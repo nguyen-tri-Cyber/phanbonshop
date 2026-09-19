@@ -56,12 +56,30 @@ async function runPaymentE2ETests() {
   );
   console.log('✓ Token Quản trị viên (ADMIN) đã khởi tạo.\n');
 
-  // Lấy danh mục sản phẩm thật
-  const prodRes = await fetch(`${GATEWAY_URL}/products?limit=2`);
+  // Lấy một sản phẩm thật còn đủ tồn cho cả COD (1) và BANK_TRANSFER (2).
+  const prodRes = await fetch(`${GATEWAY_URL}/products?limit=20`);
   const prodJson = await prodRes.json();
   assert.ok(prodJson.data.items.length >= 1, 'Cần ít nhất 1 sản phẩm');
-  const p1 = prodJson.data.items[0];
-  const v1 = p1.variants[0];
+
+  let p1;
+  let v1;
+  for (const product of prodJson.data.items) {
+    const inventoryRes = await fetch(`${GATEWAY_URL}/inventory/products/${product.id}`);
+    const inventoryJson = await inventoryRes.json().catch(() => ({}));
+    const inventoryRows = inventoryJson.data || inventoryJson.items || inventoryJson || [];
+    const rows = Array.isArray(inventoryRows) ? inventoryRows : [];
+    const stockedVariant = product.variants.find((variant) => {
+      const row = rows.find((item) => item.variantId === variant.id);
+      return row && Number(row.availableQuantity) >= 3;
+    });
+    if (stockedVariant) {
+      p1 = product;
+      v1 = stockedVariant;
+      break;
+    }
+  }
+
+  assert.ok(p1 && v1, 'Cần ít nhất 1 variant còn availableQuantity >= 3 để test payment');
   console.log(`- Sản phẩm thử nghiệm: "${p1.name}" (${v1.packageSize}) - ${v1.price}đ\n`);
 
   // ----------------------------------------------------------------------------------

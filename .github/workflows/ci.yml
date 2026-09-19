@@ -1,0 +1,263 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+  CI: true
+  # Isolated test secrets (never use dev or prod credentials in CI)
+  JWT_SECRET: ci_test_jwt_secret_token_must_have_at_least_32_characters
+  INTERNAL_SERVICE_SECRET: ci_test_internal_service_secret_token_secure
+  CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+
+jobs:
+  # ============================================================================
+  # 1. Lint and Typecheck Job
+  # ============================================================================
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies (clean install)
+        run: npm ci
+
+      - name: Validate Prisma Schemas
+        run: npm run prisma:validate
+
+      - name: Generate Prisma Clients
+        run: npm run prisma:generate
+
+      - name: Build internal packages
+        run: npm run build:packages
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run TypeScript Typecheck
+        run: npm run typecheck
+
+  # ============================================================================
+  # 2. Unit Tests Job
+  # ============================================================================
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Clients
+        run: npm run prisma:generate
+
+      - name: Build internal packages
+        run: npm run build:packages
+
+      - name: Run unit tests
+        run: npm run test
+
+  # ============================================================================
+  # 3. Production Build Job
+  # ============================================================================
+  build:
+    name: Production Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Clients
+        run: npm run prisma:generate
+
+      - name: Build all packages & services
+        run: npm run build
+
+  # ============================================================================
+  # 4. Integration Tests & DB Migration Deploy Job (Service Containers)
+  # ============================================================================
+  integration-tests:
+    name: Integration Tests & DB Migration Deploy
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_secret
+          MYSQL_USER: ci_user
+          MYSQL_PASSWORD: ci_secret_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -pci_root_secret"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      minio:
+        image: quay.io/minio/minio:latest
+        env:
+          MINIO_ROOT_USER: ci_minio_user
+          MINIO_ROOT_PASSWORD: ci_minio_password
+        ports:
+          - 9000:9000
+        options: >-
+          server /data
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Initialize test databases in MySQL
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -pci_root_secret -e "
+            CREATE DATABASE IF NOT EXISTS auth_db;
+            CREATE DATABASE IF NOT EXISTS product_db;
+            CREATE DATABASE IF NOT EXISTS order_db;
+            CREATE DATABASE IF NOT EXISTS inventory_db;
+            CREATE DATABASE IF NOT EXISTS customer_db;
+            CREATE DATABASE IF NOT EXISTS content_db;
+            GRANT ALL PRIVILEGES ON *.* TO 'ci_user'@'%';
+            FLUSH PRIVILEGES;
+          "
+
+      - name: Deploy Prisma Migrations (Test idempotency & schema against fresh MySQL 8)
+        env:
+          DATABASE_URL_AUTH: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          DATABASE_URL_PRODUCT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
+          DATABASE_URL_ORDER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
+          DATABASE_URL_INVENTORY: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          DATABASE_URL_CUSTOMER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
+          DATABASE_URL_CONTENT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
+        run: |
+          DATABASE_URL=$DATABASE_URL_AUTH npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_PRODUCT npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_ORDER npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_INVENTORY npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_CUSTOMER npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_CONTENT npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
+
+      - name: Verify second migration deploy run is cleanly idempotent
+        env:
+          DATABASE_URL_AUTH: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          DATABASE_URL_PRODUCT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
+          DATABASE_URL_ORDER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
+          DATABASE_URL_INVENTORY: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          DATABASE_URL_CUSTOMER: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
+          DATABASE_URL_CONTENT: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
+        run: |
+          DATABASE_URL=$DATABASE_URL_AUTH npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_PRODUCT npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_ORDER npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_INVENTORY npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_CUSTOMER npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
+          DATABASE_URL=$DATABASE_URL_CONTENT npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
+
+  # ============================================================================
+  # 5. Docker Build Test Job (Verify Dockerfiles & Compose)
+  # ============================================================================
+  docker-build-test:
+    name: Docker Build & Compose Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate docker-compose.prod.yml syntax
+        env:
+          MYSQL_ROOT_PASSWORD: ci_test_password
+          MYSQL_USER: ci_test_user
+          MYSQL_PASSWORD: ci_test_password
+          REDIS_PASSWORD: ci_test_redis_password
+          MINIO_ROOT_USER: ci_minio_user
+          MINIO_ROOT_PASSWORD: ci_minio_password
+          JWT_SECRET: ci_test_jwt_secret_token_32_characters_long
+          INTERNAL_SERVICE_SECRET: ci_test_internal_secret
+          CORS_ALLOWED_ORIGINS: http://localhost:3000
+        run: docker compose -f docker-compose.prod.yml config
+
+      - name: Validate Nginx configuration syntax
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
+            -v ${{ github.workspace }}/docker/nginx/conf.d:/etc/nginx/conf.d:ro \
+            nginx:1.27-alpine nginx -t
+
+      - name: Test Build Frontend Dockerfile
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/frontend/Dockerfile
+          push: false
+          tags: phanbonshop-frontend:ci-test
+
+      - name: Test Build Backend Dockerfile (API Gateway)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/api-gateway/Dockerfile
+          push: false
+          tags: phanbonshop-gateway:ci-test
+
+      - name: Test Build Backend Dockerfile (Auth Service)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: services/auth-service/Dockerfile
+          push: false
+          tags: phanbonshop-auth:ci-test

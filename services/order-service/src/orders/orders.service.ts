@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OrderStatus, PaymentStatus, Prisma } from '../../generated/client/index.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString, getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 import crypto from 'node:crypto';
 
 const logger = createLogger('order-service:orders');
@@ -18,20 +19,20 @@ const ALLOWED_STATE_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PACKING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
   [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED, OrderStatus.RETURN_REQUESTED],
   [OrderStatus.DELIVERED]: [OrderStatus.COMPLETED, OrderStatus.RETURN_REQUESTED],
-  [OrderStatus.COMPLETED]: [OrderStatus.RETURN_REQUESTED],
-  [OrderStatus.RETURN_REQUESTED]: [OrderStatus.RETURNED, OrderStatus.DELIVERED],
+  [OrderStatus.RETURN_REQUESTED]: [OrderStatus.RETURNED, OrderStatus.COMPLETED],
   [OrderStatus.RETURNED]: [OrderStatus.REFUNDED],
+  [OrderStatus.COMPLETED]: [],
   [OrderStatus.CANCELLED]: [],
   [OrderStatus.REFUNDED]: [],
 };
 
 @Injectable()
 export class OrdersService {
-  private readonly inventoryServiceUrl =
-    process.env.INVENTORY_SERVICE_URL || 'http://localhost:3004';
-  private readonly internalSecret =
-    process.env.INTERNAL_SERVICE_SECRET ||
-    'your_internal_service_mesh_shared_secret_2026';
+  private readonly inventoryServiceUrl = getServiceUrl(
+    'INVENTORY_SERVICE_URL',
+    CANONICAL_PORTS.INVENTORY_SERVICE,
+  );
+  private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
   constructor(private readonly prisma: PrismaService) {}
 

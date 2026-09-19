@@ -11,12 +11,18 @@ import bcrypt from 'bcryptjs';
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
+  // BẢO VỆ AN TOÀN TUYỆT ĐỐI CHO PRODUCTION: Từ chối chạy seed trên production!
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[SECURITY FATAL] Refusing to seed database in PRODUCTION environment! Database seeding is strictly for development and testing.',
+    );
+  }
+
   console.log('--- [DEV ONLY] Bắt đầu khởi tạo dữ liệu mẫu cho auth_db ---');
 
-  const adminEmail = 'admin@local.test';
-  const adminPasswordPlain = 'Admin@123456';
+  const devPasswordPlain = process.env.DEV_SEED_PASSWORD || 'Dev@Test123456';
   const salt = await bcrypt.genSalt(12);
-  const passwordHash = await bcrypt.hash(adminPasswordPlain, salt);
+  const passwordHash = await bcrypt.hash(devPasswordPlain, salt);
 
   const usersToSeed = [
     {
@@ -26,20 +32,20 @@ async function main(): Promise<void> {
       role: Role.SUPER_ADMIN,
     },
     {
-      email: 'admin@phanbonshop.vn',
-      fullName: 'Quản Trị Viên Shop',
+      email: 'manager@local.test',
+      fullName: 'Quản Trị Viên Shop (DEV)',
       phone: '0900000002',
       role: Role.ADMIN,
     },
     {
-      email: 'staff@phanbonshop.vn',
-      fullName: 'Nhân Viên Bán Hàng',
+      email: 'staff@local.test',
+      fullName: 'Nhân Viên Bán Hàng (DEV)',
       phone: '0900000003',
       role: Role.STAFF,
     },
     {
-      email: 'customer@phanbonshop.vn',
-      fullName: 'Khách Hàng Thân Thiết',
+      email: 'customer@local.test',
+      fullName: 'Khách Hàng Thân Thiết (DEV)',
       phone: '0900000004',
       role: Role.CUSTOMER,
     },
@@ -72,7 +78,7 @@ async function main(): Promise<void> {
           emailVerifiedAt: new Date(),
         },
       });
-      console.log(`[DEV ONLY] Đã tạo mới tài khoản: ${u.email} / ${adminPasswordPlain} (Role: ${u.role})`);
+      console.log(`[DEV ONLY] Đã tạo mới tài khoản: ${u.email} / ${devPasswordPlain} (Role: ${u.role})`);
     }
   }
 

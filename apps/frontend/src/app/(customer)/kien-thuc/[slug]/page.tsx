@@ -54,7 +54,7 @@ export async function generateMetadata({
 
   const title = post.seoTitle || post.title;
   const description = post.seoDescription || post.excerpt || 'Kiến thức bón phân và chăm sóc cây trồng chính xác.';
-  const url = `http://localhost:3000/kien-thuc/${post.slug}`;
+  const url = `/kien-thuc/${post.slug}`;
 
   return {
     title: `${title} | Kiến Thức Nông Nghiệp Phân Bón Shop`,
@@ -97,15 +97,17 @@ export default async function BlogPostDetailPage({
         year: 'numeric',
       });
 
-  // Schema.org Article Structured Data (Module 4 SEO requirement preview)
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000').replace(/\/$/, '');
+
+  // JSON-LD Structured Data
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Article',
     headline: post.title,
-    description: post.excerpt || post.title,
-    image: post.coverImageUrl || undefined,
+    description: post.seoDescription || post.excerpt,
+    image: post.coverImageUrl ? [post.coverImageUrl] : [],
     datePublished: post.publishedAt || post.createdAt,
-    dateModified: post.updatedAt || post.createdAt,
+    dateModified: post.updatedAt || post.publishedAt || post.createdAt,
     author: {
       '@type': 'Organization',
       name: 'Phân Bón Shop - Ban Biên Tập Kỹ Thuật Nông Nghiệp',
@@ -113,11 +115,11 @@ export default async function BlogPostDetailPage({
     publisher: {
       '@type': 'Organization',
       name: 'Phân Bón Shop',
-      url: 'http://localhost:3000',
+      url: siteUrl,
     },
     mainEntityOfPage: {
       '@type': 'WebPage',
-      '@id': `http://localhost:3000/kien-thuc/${post.slug}`,
+      '@id': `${siteUrl}/kien-thuc/${post.slug}`,
     },
   };
 
@@ -129,19 +131,19 @@ export default async function BlogPostDetailPage({
         '@type': 'ListItem',
         position: 1,
         name: 'Trang chủ',
-        item: 'http://localhost:3000',
+        item: siteUrl,
       },
       {
         '@type': 'ListItem',
         position: 2,
         name: 'Kiến thức nông nghiệp',
-        item: 'http://localhost:3000/kien-thuc',
+        item: `${siteUrl}/kien-thuc`,
       },
       {
         '@type': 'ListItem',
         position: 3,
         name: post.title,
-        item: `http://localhost:3000/kien-thuc/${post.slug}`,
+        item: `${siteUrl}/kien-thuc/${post.slug}`,
       },
     ],
   };

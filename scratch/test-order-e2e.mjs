@@ -36,14 +36,33 @@ async function runOrderE2ETests() {
   const customerId = loginJson.data.user.id;
   console.log(`✓ Khách hàng đăng nhập thành công: ${testUser.fullName} (ID: ${customerId})\n`);
 
-  // Lấy sản phẩm thật từ Product Service
-  const prodRes = await fetch(`${GATEWAY_URL}/products?limit=2`);
+  // Lấy sản phẩm thật còn đủ tồn kho để tránh dữ liệu concurrency cũ làm checkout fail.
+  const prodRes = await fetch(`${GATEWAY_URL}/products?limit=20`);
   const prodJson = await prodRes.json();
   assert.ok(prodJson.data.items.length >= 2, 'Có ít nhất 2 sản phẩm');
-  const p1 = prodJson.data.items[0];
-  const v1 = p1.variants[0];
-  const p2 = prodJson.data.items[1];
-  const v2 = p2.variants[0];
+  const stockedVariants = [];
+  for (const product of prodJson.data.items) {
+    const inventoryRes = await fetch(`${GATEWAY_URL}/inventory/products/${product.id}`);
+    const inventoryJson = await inventoryRes.json().catch(() => ({}));
+    const rows = Array.isArray(inventoryJson.data) ? inventoryJson.data : [];
+    for (const variant of product.variants) {
+      const row = rows.find((item) => item.variantId === variant.id);
+      if (row && Number(row.availableQuantity) > 0) {
+        stockedVariants.push({ product, variant, availableQuantity: Number(row.availableQuantity) });
+      }
+    }
+  }
+
+  const first = stockedVariants.find((item) => item.availableQuantity >= 3);
+  const second = stockedVariants.find(
+    (item) => item.variant.id !== first?.variant.id && item.availableQuantity >= 1,
+  );
+  assert.ok(first && second, 'Cần ít nhất 2 variant còn tồn, trong đó variant đầu availableQuantity >= 3');
+
+  const p1 = first.product;
+  const v1 = first.variant;
+  const p2 = second.product;
+  const v2 = second.variant;
 
   const officialPrice1 = Number(v1.price);
   const officialPrice2 = Number(v2.price);

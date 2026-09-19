@@ -9,6 +9,7 @@ import {
 import { CustomerProfile, Address, Prisma } from '../../generated/client/index.js';
 import { VIETNAM_DIVISIONS } from '@phanbonshop/shared-utils';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString, getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('customer-service');
 
@@ -94,6 +95,20 @@ export class CustomerService {
         ...(dto.fullName !== undefined ? { fullName: dto.fullName } : {}),
         ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
         ...(dto.avatarUrl !== undefined ? { avatarUrl: dto.avatarUrl } : {}),
+      },
+    });
+  }
+
+  /**
+   * Tra cứu địa chỉ theo addressId thuộc về userId cụ thể (chống IDOR)
+   */
+  async getAddressForCustomer(userId: string, addressId: string): Promise<Address | null> {
+    return this.prisma.address.findFirst({
+      where: {
+        id: addressId,
+        customer: {
+          userId,
+        },
       },
     });
   }
@@ -307,15 +322,18 @@ export class CustomerService {
       this.prisma.customerProfile.count({ where }),
     ]);
 
-    const orderServiceUrl = process.env.ORDER_SERVICE_URL || 'http://localhost:3003';
-    const internalSecret = process.env.INTERNAL_SERVICE_SECRET || 'your_internal_service_mesh_shared_secret_2026';
+    const orderServiceUrl = getServiceUrl(
+      'ORDER_SERVICE_URL',
+      CANONICAL_PORTS.ORDER_SERVICE,
+    );
+    const internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
     const items = await Promise.all(
       profiles.map(async (p) => {
         let orderCount = 0;
         let totalSpend = 0;
         try {
-          const res = await fetch(`${orderServiceUrl}/api/v1/orders/admin/customer-summary/${p.userId}`, {
+          const res = await fetch(`${orderServiceUrl}/internal/v1/orders/customer-summary/${p.userId}`, {
             headers: {
               'x-internal-secret': internalSecret,
             },
@@ -372,15 +390,18 @@ export class CustomerService {
       throw new NotFoundException(`Không tìm thấy hồ sơ khách hàng với ID: ${userId}`);
     }
 
-    const orderServiceUrl = process.env.ORDER_SERVICE_URL || 'http://localhost:3003';
-    const internalSecret = process.env.INTERNAL_SERVICE_SECRET || 'your_internal_service_mesh_shared_secret_2026';
+    const orderServiceUrl = getServiceUrl(
+      'ORDER_SERVICE_URL',
+      CANONICAL_PORTS.ORDER_SERVICE,
+    );
+    const internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
     let orderCount = 0;
     let totalSpend = 0;
     let orders: unknown[] = [];
 
     try {
-      const res = await fetch(`${orderServiceUrl}/api/v1/orders/admin/customer-summary/${userId}`, {
+      const res = await fetch(`${orderServiceUrl}/internal/v1/orders/customer-summary/${userId}`, {
         headers: {
           'x-internal-secret': internalSecret,
         },

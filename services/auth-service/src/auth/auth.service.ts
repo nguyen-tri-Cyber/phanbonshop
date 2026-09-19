@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RegisterDto } from './dto/register.dto.js';
@@ -15,6 +15,8 @@ import { LoginDto } from './dto/login.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/reset-password.dto.js';
 import { Role, UserStatus, User } from '../../generated/client/index.js';
+import { getEnvString } from '@phanbonshop/config';
+import { EmailService } from '../email/email.service.js';
 
 export interface TokenResult {
   accessToken: string;
@@ -41,13 +43,15 @@ export class AuthService {
   private readonly jwtRefreshSecret: string;
   private readonly accessTokenExpiresIn = 900; // 15 phút (giây)
   private readonly refreshTokenExpiresInDays = 7; // 7 ngày
+  private readonly resetTokenExpiresInMinutes = 15; // 15 phút
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly emailService: EmailService,
   ) {
-    this.jwtAccessSecret = process.env.JWT_ACCESS_SECRET || 'super_secret_access_key_phanbonshop_2026';
-    this.jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'super_secret_refresh_key_phanbonshop_2026';
+    this.jwtAccessSecret = getEnvString('JWT_ACCESS_SECRET');
+    this.jwtRefreshSecret = getEnvString('JWT_REFRESH_SECRET');
   }
 
   // 1. Tiện ích Hash
@@ -308,25 +312,125 @@ export class AuthService {
     return { message: 'Đổi mật khẩu thành công. Vui lòng đăng nhập lại.' };
   }
 
-  // 10. Quên & Khôi phục mật khẩu
+  // 10. Quên mật khẩu (Production-Grade)
   async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
+    const genericMessage = 'Nếu email tồn tại trong hệ thống, hướng dẫn khôi phục sẽ được gửi tới hòm thư.';
+    const normalizedEmail = dto.email.toLowerCase().trim();
+
     const user = await this.prisma.user.findUnique({
-      where: { email: dto.email.toLowerCase().trim() },
+      where: { email: normalizedEmail },
     });
 
-    // Không tiết lộ email có tồn tại hay không vì lý do bảo mật
+    // Không tiết lộ email có tồn tại hay không (chống Email Enumeration)
     if (!user) {
-      return { message: 'Nếu email tồn tại trong hệ thống, hướng dẫn khôi phục sẽ được gửi tới hòm thư.' };
+      return { message: genericMessage };
     }
 
-    return { message: 'Nếu email tồn tại trong hệ thống, hướng dẫn khôi phục sẽ được gửi tới hòm thư.' };
+    // Invalidate tất cả reset tokens cũ chưa sử dụng của user
+    await this.prisma.passwordResetToken.updateMany({
+      where: {
+        userId: user.id,
+        usedAt: null,
+      },
+      data: { usedAt: new Date() },
+    });
+
+    // Tạo cryptographically secure random token
+    const rawToken = randomBytes(32).toString('hex');
+    const tokenHash = this.hashToken(rawToken);
+    const expiresAt = new Date(Date.now() + this.resetTokenExpiresInMinutes * 60 * 1000);
+
+    // Lưu hash vào DB (KHÔNG BAO GIỜ lưu plaintext token)
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    // Gửi email khôi phục
+    await this.emailService.sendPasswordReset(user.email, rawToken, {
+      fullName: user.fullName,
+    });
+
+    return { message: genericMessage };
   }
 
+  // 11. Đặt lại mật khẩu (Production-Grade, Atomic Transaction)
   async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
     if (!dto.resetToken) {
       throw new BadRequestException('Mã khôi phục không hợp lệ');
     }
-    return { message: 'Mật khẩu đã được đặt lại thành công.' };
+
+    // Hash token gửi lên từ client để tìm kiếm trong DB
+    const tokenHash = this.hashToken(dto.resetToken);
+
+    const resetTokenRecord = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+      include: { user: true },
+    });
+
+    // Kiểm tra token tồn tại
+    if (!resetTokenRecord) {
+      throw new BadRequestException('Mã khôi phục không hợp lệ hoặc đã hết hạn');
+    }
+
+    // Kiểm tra token đã sử dụng chưa
+    if (resetTokenRecord.usedAt !== null) {
+      throw new BadRequestException('Mã khôi phục đã được sử dụng');
+    }
+
+    // Kiểm tra token đã hết hạn chưa
+    if (resetTokenRecord.expiresAt < new Date()) {
+      throw new BadRequestException('Mã khôi phục đã hết hạn');
+    }
+
+    // Kiểm tra trạng thái tài khoản
+    if (resetTokenRecord.user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Tài khoản hiện đang không hoạt động, vui lòng liên hệ hỗ trợ');
+    }
+
+    // Băm mật khẩu mới (bcrypt, salt rounds 12)
+    const newPasswordHash = await this.hashPassword(dto.newPassword);
+
+    // Thực thi giao dịch nguyên tử (Atomic Transaction)
+    await this.prisma.$transaction([
+      // 1. Cập nhật mật khẩu user
+      this.prisma.user.update({
+        where: { id: resetTokenRecord.userId },
+        data: { passwordHash: newPasswordHash },
+      }),
+
+      // 2. Đánh dấu token đã sử dụng
+      this.prisma.passwordResetToken.update({
+        where: { id: resetTokenRecord.id },
+        data: { usedAt: new Date() },
+      }),
+
+      // 3. Thu hồi toàn bộ RefreshTokenSession đang hoạt động
+      this.prisma.refreshTokenSession.updateMany({
+        where: { userId: resetTokenRecord.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+
+      // 4. Ghi nhật ký kiểm toán (Audit Log)
+      this.prisma.auditLog.create({
+        data: {
+          actorId: resetTokenRecord.userId,
+          actorRole: resetTokenRecord.user.role,
+          action: 'PASSWORD_RESET',
+          entityType: 'USER',
+          entityId: resetTokenRecord.userId,
+          oldValue: null,
+          newValue: JSON.stringify({ reason: 'Password reset via token' }),
+          ipAddress: null,
+          requestId: null,
+        },
+      }),
+    ]);
+
+    return { message: 'Mật khẩu đã được đặt lại thành công. Vui lòng đăng nhập lại với mật khẩu mới.' };
   }
 
   async updateUserRoleOrStatus(

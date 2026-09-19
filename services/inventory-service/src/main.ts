@@ -4,10 +4,17 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { createLogger } from '@phanbonshop/logger';
+import { validateStartupEnv, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('inventory-service');
 
 async function bootstrap(): Promise<void> {
+  // 0. Startup Environment Validation
+  validateStartupEnv('inventory-service', {
+    requiredVars: ['JWT_ACCESS_SECRET', 'INTERNAL_SERVICE_SECRET'],
+    requiredDatabaseUrl: 'INVENTORY_DATABASE_URL',
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
@@ -33,7 +40,7 @@ async function bootstrap(): Promise<void> {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  const port = Number(process.env.INVENTORY_SERVICE_PORT) || 3004;
+  const port = Number(process.env.INVENTORY_SERVICE_PORT) || CANONICAL_PORTS.INVENTORY_SERVICE;
   await app.listen(port, '0.0.0.0');
 
   logger.info(`Inventory Service đã khởi động thành công trên cổng ${port}`, {

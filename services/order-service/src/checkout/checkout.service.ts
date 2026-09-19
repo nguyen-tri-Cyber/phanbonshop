@@ -3,24 +3,62 @@ import {
   BadRequestException,
   ConflictException,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { OrdersService } from '../orders/orders.service.js';
 import { CouponsService } from '../coupons/coupons.service.js';
 import { ShippingService } from '../shipping/shipping.service.js';
 import { CartService } from '../cart/cart.service.js';
-import { PaymentsService, CreatedPaymentResult } from '../payments/payments.service.js';
+import { PaymentsService } from '../payments/payments.service.js';
 import { CheckoutDto, CheckoutShippingAddressDto } from './dto/checkout.dto.js';
 import {
   OrderStatus,
   PaymentStatus,
   PaymentMethod,
-  Order,
+  IdempotencyStatus,
+  CompensationTaskType,
 } from '../../generated/client/index.js';
+import { CompensationService } from '../compensation/compensation.service.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString, getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 import crypto from 'node:crypto';
 
 const logger = createLogger('order-service:checkout');
+
+/**
+ * Chuẩn hóa JSON một cách xác định (deterministic canonicalization)
+ * bằng cách sắp xếp đệ quy các khóa của object.
+ */
+export function canonicalizeJson(obj: unknown): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map((item) => canonicalizeJson(item)).join(',') + ']';
+  }
+  const sortedKeys = Object.keys(obj as Record<string, unknown>).sort();
+  const parts: string[] = [];
+  for (const k of sortedKeys) {
+    const val = (obj as Record<string, unknown>)[k];
+    if (val !== undefined) {
+      parts.push(`${JSON.stringify(k)}:${canonicalizeJson(val)}`);
+    }
+  }
+  return '{' + parts.join(',') + '}';
+}
+
+/**
+ * Tính toán SHA-256 digest của payload đã được canonicalize
+ */
+export function computeRequestHash(payload: unknown): string {
+  const canonical = canonicalizeJson(payload);
+  return crypto.createHash('sha256').update(canonical).digest('hex');
+}
+
+export interface ProcessCheckoutOptions {
+  bypassInMemoryLock?: boolean;
+}
 
 interface CatalogVariant {
   id: string;
@@ -51,15 +89,19 @@ interface ValidatedOrderItem {
 
 @Injectable()
 export class CheckoutService {
-  private readonly productServiceUrl =
-    process.env.PRODUCT_SERVICE_URL || 'http://localhost:3002';
-  private readonly inventoryServiceUrl =
-    process.env.INVENTORY_SERVICE_URL || 'http://localhost:3004';
-  private readonly customerServiceUrl =
-    process.env.CUSTOMER_SERVICE_URL || 'http://localhost:3005';
-  private readonly internalSecret =
-    process.env.INTERNAL_SERVICE_SECRET ||
-    'your_internal_service_mesh_shared_secret_2026';
+  private readonly productServiceUrl = getServiceUrl(
+    'PRODUCT_SERVICE_URL',
+    CANONICAL_PORTS.PRODUCT_SERVICE,
+  );
+  private readonly inventoryServiceUrl = getServiceUrl(
+    'INVENTORY_SERVICE_URL',
+    CANONICAL_PORTS.INVENTORY_SERVICE,
+  );
+  private readonly customerServiceUrl = getServiceUrl(
+    'CUSTOMER_SERVICE_URL',
+    CANONICAL_PORTS.CUSTOMER_SERVICE,
+  );
+  private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
   private readonly inFlightRequests = new Map<string, Promise<unknown>>();
 
@@ -70,6 +112,7 @@ export class CheckoutService {
     private readonly shippingService: ShippingService,
     private readonly cartService: CartService,
     private readonly paymentsService: PaymentsService,
+    private readonly compensationService: CompensationService,
   ) {}
 
   /**
@@ -87,45 +130,244 @@ export class CheckoutService {
    * 10. Saga Step 3: Tạo Payment Record
    * 11. Lưu Idempotency Record & Trả về kết quả
    */
+  /**
+   * Cố gắng claim quyền xử lý IdempotencyRecord trong database (Distributed Atomic Claim)
+   */
+  async claimIdempotencyRecord(
+    customerId: string,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<{ isOwner: boolean; isCompleted: boolean; recordId?: string; response?: unknown }> {
+    const expiresAt = new Date(Date.now() + 24 * 3600 * 1000); // 24h
+
+    // 1. Thử INSERT nguyên tử với status = PROCESSING
+    try {
+      const created = await this.prisma.idempotencyRecord.create({
+        data: {
+          customerId,
+          idempotencyKey,
+          requestPath: '/api/v1/checkout',
+          requestHash,
+          status: IdempotencyStatus.PROCESSING,
+          expiresAt,
+        },
+      });
+      return { isOwner: true, isCompleted: false, recordId: created.id };
+    } catch (err: unknown) {
+      // Bắt lỗi Unique Constraint Violation (P2002 của Prisma hoặc duplicate key của MySQL)
+      const isUniqueConflict =
+        (err as { code?: string })?.code === 'P2002' ||
+        String(err).includes('Unique constraint failed') ||
+        String(err).includes('ER_DUP_ENTRY');
+
+      if (!isUniqueConflict) {
+        throw err;
+      }
+    }
+
+    // 2. Nếu gặp Unique Conflict: Load bản ghi hiện có từ Database
+    const existing = await this.prisma.idempotencyRecord.findUnique({
+      where: {
+        customerId_idempotencyKey: {
+          customerId,
+          idempotencyKey,
+        },
+      },
+    });
+
+    if (!existing) {
+      // Trường hợp hiếm: bản ghi vừa bị xóa giữa create và findUnique -> đệ quy thử lại 1 lần
+      return this.claimIdempotencyRecord(customerId, idempotencyKey, requestHash);
+    }
+
+    // 2.1. Kiểm tra Request Hash có khớp không
+    if (existing.requestHash !== requestHash) {
+      throw new ConflictException({
+        code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST',
+        message: 'Idempotency-Key đã được sử dụng cho một yêu cầu thanh toán khác với nội dung khác.',
+      });
+    }
+
+    // 2.2. Nếu đã hoàn tất (COMPLETED): Trả lại response đã lưu
+    if (existing.status === IdempotencyStatus.COMPLETED) {
+      if (!existing.responseBody) {
+        throw new InternalServerErrorException('Bản ghi hoàn tất nhưng không có dữ liệu phản hồi');
+      }
+      return {
+        isOwner: false,
+        isCompleted: true,
+        response: JSON.parse(existing.responseBody),
+      };
+    }
+
+    // 2.3. Nếu đang xử lý (PROCESSING):
+    if (existing.status === IdempotencyStatus.PROCESSING) {
+      const isStale = existing.updatedAt.getTime() < Date.now() - 120_000; // Quá 2 phút coi như stale
+      if (!isStale) {
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_IN_PROGRESS',
+          message: 'Yêu cầu thanh toán đang được xử lý, vui lòng không gửi lặp lại.',
+        });
+      }
+
+      // Stale record: Thử atomic reclaim
+      logger.warn(`IdempotencyRecord [${idempotencyKey}] bị kẹt PROCESSING quá 2 phút, tiến hành reclaim...`);
+      const reclaimStale = await this.prisma.idempotencyRecord.updateMany({
+        where: {
+          id: existing.id,
+          status: IdempotencyStatus.PROCESSING,
+          updatedAt: existing.updatedAt,
+        },
+        data: {
+          status: IdempotencyStatus.PROCESSING,
+          requestHash,
+          updatedAt: new Date(),
+          responseBody: null,
+          statusCode: null,
+          orderId: null,
+        },
+      });
+
+      if (reclaimStale.count > 0) {
+        return { isOwner: true, isCompleted: false, recordId: existing.id };
+      } else {
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_IN_PROGRESS',
+          message: 'Yêu cầu thanh toán đang được xử lý bởi một phiên khác.',
+        });
+      }
+    }
+
+    // 2.4. Nếu thất bại trước đó (FAILED): Policy retry an toàn
+    if (existing.status === IdempotencyStatus.FAILED) {
+      logger.info(`IdempotencyRecord [${idempotencyKey}] trước đó bị FAILED, tiến hành retry an toàn...`);
+      const reclaimFailed = await this.prisma.idempotencyRecord.updateMany({
+        where: {
+          id: existing.id,
+          status: IdempotencyStatus.FAILED,
+          updatedAt: existing.updatedAt,
+        },
+        data: {
+          status: IdempotencyStatus.PROCESSING,
+          requestHash,
+          updatedAt: new Date(),
+          responseBody: null,
+          statusCode: null,
+          orderId: null,
+        },
+      });
+
+      if (reclaimFailed.count > 0) {
+        return { isOwner: true, isCompleted: false, recordId: existing.id };
+      } else {
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_IN_PROGRESS',
+          message: 'Yêu cầu thanh toán đang được xử lý bởi một phiên khác.',
+        });
+      }
+    }
+
+    throw new ConflictException({
+      code: 'IDEMPOTENCY_IN_PROGRESS',
+      message: 'Trạng thái idempotency không xác định.',
+    });
+  }
+
+  /**
+   * Dọn dẹp các IdempotencyRecord ở trạng thái PROCESSING quá lâu (mặc định > 2 phút)
+   * do worker/server instance bị crash đột ngột.
+   */
+  async cleanupStaleProcessingRecords(olderThanMs: number = 120_000): Promise<number> {
+    const staleThreshold = new Date(Date.now() - olderThanMs);
+    const result = await this.prisma.idempotencyRecord.updateMany({
+      where: {
+        status: IdempotencyStatus.PROCESSING,
+        updatedAt: { lt: staleThreshold },
+      },
+      data: {
+        status: IdempotencyStatus.FAILED,
+        statusCode: 504,
+        responseBody: JSON.stringify({
+          success: false,
+          error: {
+            code: 'PROCESSING_TIMEOUT',
+            message: 'Yêu cầu xử lý đã hết thời gian chờ (stale processing timeout)',
+          },
+        }),
+      },
+    });
+
+    if (result.count > 0) {
+      logger.info(`Đã dọn dẹp ${result.count} bản ghi idempotency PROCESSING quá hạn.`);
+    }
+
+    return result.count;
+  }
+
+  /**
+   * Tiến trình Checkout Saga Orchestrator:
+   * 1. Check Idempotency (CustomerId + Idempotency-Key) qua Database Distributed Lock
+   * 2. Lấy & Validate danh sách sản phẩm
+   * 3. Gọi Product Service lấy giá niêm yết hiện hành (bỏ qua giá client gửi)
+   * 4. Tính toán Subtotal Server-side
+   * 5. Thẩm định Coupon & Tính Discount Server-side
+   * 6. Tính Phí Vận Chuyển Server-side theo vùng miền
+   * 7. Tính Total Server-side
+   * 8. Saga Step 1: Reserve tồn kho qua Inventory Service
+   * 9. Saga Step 2: Tạo Order, Item Snapshot, Shipping Snapshot trong local MySQL transaction
+   * 10. Saga Step 3: Tạo Payment Record & Cập nhật IdempotencyRecord -> COMPLETED
+   *    (Nếu fail -> Kích hoạt Bồi hoàn Compensation giải phóng kho & cập nhật IdempotencyRecord -> FAILED)
+   */
   async processCheckout(
     customerId: string,
     dto: CheckoutDto,
     idempotencyKey?: string,
+    options?: ProcessCheckoutOptions,
   ) {
     if (idempotencyKey) {
       const lockKey = `${customerId}:${idempotencyKey}`;
-      const inFlight = this.inFlightRequests.get(lockKey);
-      if (inFlight) {
-        logger.info(
-          `Idempotency-Key [${idempotencyKey}] đang được xử lý đồng thời, chờ request đầu hoàn tất...`,
-          { customerId },
-        );
-        return inFlight;
+
+      if (!options?.bypassInMemoryLock) {
+        const inFlight = this.inFlightRequests.get(lockKey);
+        if (inFlight) {
+          logger.info(
+            `Idempotency-Key [${idempotencyKey}] đang được xử lý đồng thời trong tiến trình này...`,
+            { customerId },
+          );
+          return inFlight;
+        }
       }
 
-      const existingRecord = await this.prisma.idempotencyRecord.findUnique({
-        where: {
-          customerId_idempotencyKey: {
-            customerId,
-            idempotencyKey,
-          },
-        },
-      });
+      const requestHash = computeRequestHash(dto);
+      const claim = await this.claimIdempotencyRecord(customerId, idempotencyKey, requestHash);
 
-      if (existingRecord) {
+      if (claim.isCompleted) {
         logger.info(
           `Idempotency-Key trùng lặp [${idempotencyKey}]. Trả lại kết quả đơn hàng đã tạo trước đó.`,
           { customerId },
         );
-        return JSON.parse(existingRecord.responseBody);
+        return claim.response;
       }
 
-      const checkoutPromise = this.executeCheckout(customerId, dto, idempotencyKey);
-      this.inFlightRequests.set(lockKey, checkoutPromise);
+      if (!claim.isOwner || !claim.recordId) {
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_IN_PROGRESS',
+          message: 'Yêu cầu thanh toán đang được xử lý, vui lòng không gửi lặp lại.',
+        });
+      }
+
+      const checkoutPromise = this.executeCheckout(customerId, dto, idempotencyKey, claim.recordId);
+
+      if (!options?.bypassInMemoryLock) {
+        this.inFlightRequests.set(lockKey, checkoutPromise);
+      }
+
       try {
         return await checkoutPromise;
       } finally {
-        this.inFlightRequests.delete(lockKey);
+        if (!options?.bypassInMemoryLock) {
+          this.inFlightRequests.delete(lockKey);
+        }
       }
     }
 
@@ -136,157 +378,171 @@ export class CheckoutService {
     customerId: string,
     dto: CheckoutDto,
     idempotencyKey?: string,
+    idempotencyRecordId?: string,
   ) {
-
-    // 2. Xác định danh sách mặt hàng cần mua
-    let rawItems = dto.items;
-    if (!rawItems || rawItems.length === 0) {
-      // Lấy từ giỏ hàng hiện tại của khách
-      const userCart = await this.cartService.getOrCreateCart(customerId);
-      if (!userCart.items || userCart.items.length === 0) {
-        throw new BadRequestException(
-          'Giỏ hàng của bạn đang trống. Vui lòng thêm sản phẩm trước khi thanh toán.',
-        );
-      }
-      rawItems = userCart.items.map((i) => ({
-        productId: i.productId,
-        variantId: i.variantId,
-        quantity: i.quantity,
-      }));
-    }
-
-    // 3. Xác định địa chỉ nhận hàng
-    let shippingAddress: CheckoutShippingAddressDto | undefined = dto.shippingAddress;
-    if (!shippingAddress && dto.addressId) {
-      const fetched = await this.fetchCustomerAddress(customerId, dto.addressId);
-      if (fetched) {
-        shippingAddress = fetched;
-      }
-    }
-    if (!shippingAddress) {
-      throw new BadRequestException(
-        'Vui lòng cung cấp địa chỉ giao hàng (shippingAddress hoặc addressId).',
-      );
-    }
-
-    // 4. Lấy giá niêm yết hiện hành từ Product Service & validate catalog
-    // (Bỏ qua hoàn toàn price/subtotal/total do frontend gửi lên)
-    const validatedItems: ValidatedOrderItem[] = [];
-    let subtotal = 0;
-
-    for (const item of rawItems) {
-      const productData = await this.fetchProductCatalog(item.productId);
-      if (!productData) {
-        throw new BadRequestException(`Không tìm thấy sản phẩm ID: ${item.productId}`);
-      }
-
-      if (productData.status !== 'ACTIVE') {
-        throw new BadRequestException(
-          `Sản phẩm "${productData.name}" hiện không mở bán (Trạng thái: ${productData.status}).`,
-        );
-      }
-
-      const variant = productData.variants?.find(
-        (v: { id: string }) => v.id === item.variantId,
-      );
-      if (!variant) {
-        throw new BadRequestException(
-          `Không tìm thấy quy cách đóng gói (variant: ${item.variantId}) của sản phẩm "${productData.name}".`,
-        );
-      }
-
-      if (variant.status !== 'ACTIVE') {
-        throw new BadRequestException(
-          `Quy cách đóng gói "${variant.packageSize}" của sản phẩm "${productData.name}" hiện tạm hết hàng hoặc ngừng kinh doanh.`,
-        );
-      }
-
-      const officialUnitPrice = Number(variant.price);
-      const quantity = Math.min(Math.max(1, item.quantity), 99);
-      const lineTotal = officialUnitPrice * quantity;
-
-      subtotal += lineTotal;
-
-      validatedItems.push({
-        productId: productData.id,
-        variantId: variant.id,
-        productName: productData.name,
-        variantName: variant.packageSize || variant.unit || 'Tiêu chuẩn',
-        sku: variant.sku,
-        unitPrice: officialUnitPrice,
-        quantity,
-        lineTotal,
-      });
-    }
-
-    // 5. Thẩm định Coupon & Tính Discount Server-side
-    let discountAmount = 0;
-    let isFreeShippingCoupon = false;
-    let validatedCouponCode: string | null = null;
-
-    if (dto.couponCode && dto.couponCode.trim()) {
-      const couponResult = await this.couponsService.validateCoupon(
-        dto.couponCode,
-        subtotal,
-        customerId,
-      );
-      discountAmount = couponResult.discountAmount;
-      isFreeShippingCoupon = couponResult.isFreeShipping;
-      validatedCouponCode = couponResult.code;
-    }
-
-    // 6. Tính Phí Vận Chuyển Server-side theo vùng miền nông nghiệp
-    const shippingResult = this.shippingService.calculateShippingFee({
-      provinceCode: shippingAddress.provinceCode,
-      subtotal,
-      isFreeShippingCoupon,
-    });
-    const shippingFee = shippingResult.shippingFee;
-
-    // 7. Tính Tổng Thanh Toán Server-side
-    const totalAmount = Math.max(0, subtotal - discountAmount + shippingFee);
-
-    // 8. SAGA STEP 1: Reserve Inventory qua Inventory Service
-    const batchReservationId =
-      'res-' + (idempotencyKey || crypto.randomUUID().replace(/-/g, ''));
+    const requestId = idempotencyKey || `req-${crypto.randomUUID().slice(0, 8)}`;
     const reservedVariantIds: string[] = [];
-
-    for (const item of validatedItems) {
-      const itemReservationId = `${batchReservationId}-${item.variantId}`;
-      const reserveSuccess = await this.reserveInventoryItem({
-        reservationId: itemReservationId,
-        productId: item.productId,
-        variantId: item.variantId,
-        quantity: item.quantity,
-        referenceType: 'ORDER',
-        referenceId: batchReservationId,
-      });
-
-      if (!reserveSuccess) {
-        // Tồn kho không đủ -> Bồi hoàn giải phóng các item đã tạm giữ trước đó
-        logger.warn(
-          `Tạm giữ kho thất bại cho variant ${item.sku}. Kích hoạt bồi hoàn cho các item trước đó.`,
-        );
-        for (const prevVariantId of reservedVariantIds) {
-          await this.releaseInventoryItem(
-            `${batchReservationId}-${prevVariantId}`,
-            'Rollback do không đủ tồn kho mặt hàng khác',
-          );
-        }
-        throw new ConflictException(
-          `Mặt hàng "${item.productName} (${item.variantName})" không đủ số lượng tồn kho khả dụng để phục vụ đơn hàng.`,
-        );
-      }
-
-      reservedVariantIds.push(item.variantId);
-    }
-
-    // 9. SAGA STEP 2: Tạo Order trong order_db (Local Transaction)
-    const orderNumber = this.ordersService.generateOrderNumber();
-    let transactionResult: { order: Order; paymentResult: CreatedPaymentResult | null };
+    let batchReservationId: string | null = null;
 
     try {
-      transactionResult = await this.prisma.$transaction(async (tx) => {
+      // 2. Xác định danh sách mặt hàng cần mua
+      let rawItems = dto.items;
+      if (!rawItems || rawItems.length === 0) {
+        // Lấy từ giỏ hàng hiện tại của khách
+        const userCart = await this.cartService.getOrCreateCart(customerId);
+        if (!userCart.items || userCart.items.length === 0) {
+          throw new BadRequestException(
+            'Giỏ hàng của bạn đang trống. Vui lòng thêm sản phẩm trước khi thanh toán.',
+          );
+        }
+        rawItems = userCart.items.map((i) => ({
+          productId: i.productId,
+          variantId: i.variantId,
+          quantity: i.quantity,
+        }));
+      }
+
+      // 3. Xác định địa chỉ nhận hàng
+      let shippingAddress: CheckoutShippingAddressDto | undefined = dto.shippingAddress;
+      if (!shippingAddress && dto.addressId) {
+        shippingAddress = await this.fetchCustomerAddress(customerId, dto.addressId);
+      }
+      if (!shippingAddress) {
+        throw new BadRequestException(
+          'Vui lòng cung cấp địa chỉ giao hàng (shippingAddress hoặc addressId).',
+        );
+      }
+
+      // 4. Lấy giá niêm yết hiện hành từ Product Service & validate catalog
+      // (Bỏ qua hoàn toàn price/subtotal/total do frontend gửi lên)
+      const validatedItems: ValidatedOrderItem[] = [];
+      let subtotal = 0;
+
+      for (const item of rawItems) {
+        const productData = await this.fetchProductCatalog(item.productId);
+        if (!productData) {
+          throw new BadRequestException(`Không tìm thấy sản phẩm ID: ${item.productId}`);
+        }
+
+        if (productData.status !== 'ACTIVE') {
+          throw new BadRequestException(
+            `Sản phẩm "${productData.name}" hiện không mở bán (Trạng thái: ${productData.status}).`,
+          );
+        }
+
+        const variant = productData.variants?.find(
+          (v: { id: string }) => v.id === item.variantId,
+        );
+        if (!variant) {
+          throw new BadRequestException(
+            `Không tìm thấy quy cách đóng gói (variant: ${item.variantId}) của sản phẩm "${productData.name}".`,
+          );
+        }
+
+        if (variant.status !== 'ACTIVE') {
+          throw new BadRequestException(
+            `Quy cách đóng gói "${variant.packageSize}" của sản phẩm "${productData.name}" hiện tạm hết hàng hoặc ngừng kinh doanh.`,
+          );
+        }
+
+        const officialUnitPrice = Number(variant.price);
+        const quantity = Math.min(Math.max(1, item.quantity), 99);
+        const lineTotal = officialUnitPrice * quantity;
+
+        subtotal += lineTotal;
+
+        validatedItems.push({
+          productId: productData.id,
+          variantId: variant.id,
+          productName: productData.name,
+          variantName: variant.packageSize || variant.unit || 'Tiêu chuẩn',
+          sku: variant.sku,
+          unitPrice: officialUnitPrice,
+          quantity,
+          lineTotal,
+        });
+      }
+
+      // 5. Thẩm định Coupon & Tính Discount Server-side
+      let discountAmount = 0;
+      let isFreeShippingCoupon = false;
+      let validatedCouponId: string | null = null;
+      let validatedCouponCode: string | null = null;
+
+      if (dto.couponCode && dto.couponCode.trim()) {
+        const couponResult = await this.couponsService.validateCoupon(
+          dto.couponCode,
+          subtotal,
+          customerId,
+        );
+        discountAmount = couponResult.discountAmount;
+        isFreeShippingCoupon = couponResult.isFreeShipping;
+        validatedCouponId = couponResult.couponId;
+        validatedCouponCode = couponResult.code;
+      }
+
+      // 6. Tính Phí Vận Chuyển Server-side theo vùng miền nông nghiệp
+      const shippingResult = this.shippingService.calculateShippingFee({
+        provinceCode: shippingAddress.provinceCode,
+        subtotal,
+        isFreeShippingCoupon,
+      });
+      const shippingFee = shippingResult.shippingFee;
+
+      // 7. Tính Tổng Thanh Toán Server-side
+      const totalAmount = Math.max(0, subtotal - discountAmount + shippingFee);
+
+      // 8. SAGA STEP 1: Reserve Inventory qua Inventory Service
+      batchReservationId =
+        'res-' + (idempotencyKey || crypto.randomUUID().replace(/-/g, ''));
+
+      for (const item of validatedItems) {
+        const itemReservationId = `${batchReservationId}-${item.variantId}`;
+        const reserveSuccess = await this.reserveInventoryItem(
+          {
+            reservationId: itemReservationId,
+            productId: item.productId,
+            variantId: item.variantId,
+            quantity: item.quantity,
+            referenceType: 'ORDER',
+            referenceId: batchReservationId,
+          },
+          requestId,
+        );
+
+        if (!reserveSuccess) {
+          // Tồn kho không đủ -> Bồi hoàn giải phóng các item đã tạm giữ trước đó
+          logger.warn(
+            `Tạm giữ kho thất bại cho variant ${item.sku}. Kích hoạt bồi hoàn cho các item trước đó.`,
+            { requestId, batchReservationId, failedVariantId: item.variantId },
+          );
+          for (const prevVariantId of reservedVariantIds) {
+            const itemResId = `${batchReservationId}-${prevVariantId}`;
+            const reason = 'Rollback do không đủ tồn kho mặt hàng khác';
+            const released = await this.releaseInventoryItem(itemResId, reason, requestId);
+            if (!released) {
+              await this.compensationService.createTask(
+                CompensationTaskType.RELEASE_INVENTORY,
+                {
+                  reservationId: itemResId,
+                  reason,
+                  requestId,
+                },
+              );
+            }
+          }
+          throw new ConflictException(
+            `Mặt hàng "${item.productName} (${item.variantName})" không đủ số lượng tồn kho khả dụng để phục vụ đơn hàng.`,
+          );
+        }
+
+        reservedVariantIds.push(item.variantId);
+      }
+
+      // 9. SAGA STEP 2 & 3: Tạo Order trong order_db (Local Transaction)
+      const orderNumber = this.ordersService.generateOrderNumber();
+
+      const transactionResult = await this.prisma.$transaction(async (tx) => {
         // Tạo Order
         const order = await tx.order.create({
           data: {
@@ -350,23 +606,42 @@ export class CheckoutService {
         });
 
         // Ghi nhận Coupon Usage nếu có
-        if (validatedCouponCode) {
+        if (validatedCouponId && validatedCouponCode) {
           const coupon = await tx.coupon.findUnique({
-            where: { code: validatedCouponCode },
+            where: { id: validatedCouponId },
           });
-          if (coupon) {
-            await tx.couponUsage.create({
-              data: {
-                couponId: coupon.id,
-                customerId,
-                orderId: order.id,
-              },
-            });
-            await tx.coupon.update({
-              where: { id: coupon.id },
-              data: { usedCount: { increment: 1 } },
-            });
+
+          if (!coupon || !coupon.enabled) {
+            throw new BadRequestException(
+              `Mã giảm giá "${validatedCouponCode}" không tồn tại hoặc đã bị vô hiệu`,
+            );
           }
+
+          const consumeResult = await tx.coupon.updateMany({
+            where: {
+              id: coupon.id,
+              enabled: true,
+              OR: [
+                { usageLimit: null },
+                { usedCount: { lt: coupon.usageLimit ?? 0 } },
+              ],
+            },
+            data: { usedCount: { increment: 1 } },
+          });
+
+          if (consumeResult.count !== 1) {
+            throw new BadRequestException(
+              `Mã giảm giá "${validatedCouponCode}" đã hết lượt sử dụng`,
+            );
+          }
+
+          await tx.couponUsage.create({
+            data: {
+              couponId: coupon.id,
+              customerId,
+              orderId: order.id,
+            },
+          });
         }
 
         // Tạo Payment Record qua PaymentsService
@@ -388,93 +663,142 @@ export class CheckoutService {
           },
         });
 
-        return { order, paymentResult };
+        const responsePayload = {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          subtotal: Number(order.subtotal),
+          discountAmount: Number(order.discountAmount),
+          shippingFee: Number(order.shippingFee),
+          totalAmount: Number(order.totalAmount),
+          couponCode: order.couponCode,
+          reservationId: order.reservationId,
+          items: validatedItems.map((i) => ({
+            id: i.variantId,
+            productId: i.productId,
+            variantId: i.variantId,
+            productName: i.productName,
+            variantName: i.variantName,
+            sku: i.sku,
+            unitPrice: i.unitPrice,
+            quantity: i.quantity,
+            lineTotal: i.lineTotal,
+          })),
+          shippingAddress: {
+            recipientName: shippingAddress.recipientName,
+            phone: shippingAddress.phone,
+            provinceCode: shippingAddress.provinceCode,
+            provinceName: shippingAddress.provinceName,
+            districtCode: shippingAddress.districtCode,
+            districtName: shippingAddress.districtName,
+            wardCode: shippingAddress.wardCode,
+            wardName: shippingAddress.wardName,
+            addressLine: shippingAddress.addressLine,
+          },
+          payment: paymentResult?.paymentRecord
+            ? {
+                id: paymentResult.paymentRecord.id,
+                provider: paymentResult.paymentRecord.provider,
+                method: paymentResult.paymentRecord.method,
+                amount: Number(paymentResult.paymentRecord.amount),
+                status: paymentResult.paymentRecord.status,
+                transactionReference:
+                  paymentResult.paymentRecord.transactionReference,
+              }
+            : null,
+          paymentDetails: paymentResult?.paymentDetails || null,
+          paymentInstruction: paymentResult?.instruction || null,
+          createdAt: order.createdAt.toISOString(),
+        };
+
+        // 10. Cập nhật IdempotencyRecord -> COMPLETED ngay trong transaction
+        if (idempotencyRecordId) {
+          await tx.idempotencyRecord.update({
+            where: { id: idempotencyRecordId },
+            data: {
+              status: IdempotencyStatus.COMPLETED,
+              statusCode: 201,
+              orderId: order.id,
+              responseBody: JSON.stringify(responsePayload),
+            },
+          });
+        }
+
+        return { order, paymentResult, responsePayload };
       });
+
+      return transactionResult.responsePayload;
     } catch (err: unknown) {
-      // SAGA COMPENSATION: Giải phóng tồn kho nếu tạo DB thất bại
-      logger.error('Lỗi khi lưu đơn hàng vào database. Kích hoạt bồi hoàn giải phóng kho:', err);
-      for (const variantId of reservedVariantIds) {
-        await this.releaseInventoryItem(
-          `${batchReservationId}-${variantId}`,
-          'Bồi hoàn do lưu đơn hàng database thất bại',
-        );
+      // SAGA COMPENSATION: Giải phóng tồn kho nếu đã tạm giữ
+      if (batchReservationId && reservedVariantIds.length > 0) {
+        logger.error('Lỗi khi thực hiện Checkout Saga. Kích hoạt bồi hoàn giải phóng kho:', {
+          requestId,
+          batchReservationId,
+          reservedCount: reservedVariantIds.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        for (const variantId of reservedVariantIds) {
+          const itemResId = `${batchReservationId}-${variantId}`;
+          const reason = 'Bồi hoàn do Checkout Saga thất bại';
+          const released = await this.releaseInventoryItem(itemResId, reason, requestId);
+          if (!released) {
+            // Immediate release thất bại -> Persist CompensationTask PENDING vào DB để worker retry sau
+            await this.compensationService.createTask(
+              CompensationTaskType.RELEASE_INVENTORY,
+              {
+                reservationId: itemResId,
+                reason,
+                requestId,
+              },
+            );
+          }
+        }
+      }
+
+      // Cập nhật IdempotencyRecord sang FAILED nếu đã claim
+      if (idempotencyRecordId) {
+        try {
+          const safeMessage = err instanceof Error ? err.message : 'Lỗi hệ thống';
+          const statusCode = (err as { status?: number })?.status || 500;
+          const errorCode =
+            ((err as { response?: { code?: string } })?.response?.code) || 'CHECKOUT_FAILED';
+
+          await this.prisma.idempotencyRecord.update({
+            where: { id: idempotencyRecordId },
+            data: {
+              status: IdempotencyStatus.FAILED,
+              statusCode,
+              responseBody: JSON.stringify({
+                success: false,
+                error: {
+                  code: errorCode,
+                  message: safeMessage,
+                },
+              }),
+            },
+          });
+        } catch (updateErr) {
+          logger.warn('Không thể cập nhật IdempotencyRecord sang FAILED', {
+            error: String(updateErr),
+          });
+        }
+      }
+
+      if (
+        err instanceof BadRequestException ||
+        err instanceof ConflictException ||
+        err instanceof InternalServerErrorException ||
+        err instanceof NotFoundException
+      ) {
+        throw err;
       }
       const errMsg = err instanceof Error ? err.message : String(err);
       throw new InternalServerErrorException(
         `Không thể hoàn tất đơn hàng: ${errMsg || 'Lỗi hệ thống'}`,
       );
     }
-
-    const { order: createdOrder, paymentResult: createdPaymentResult } = transactionResult;
-
-    // Lấy lại đầy đủ thông tin đơn hàng vừa tạo
-    const fullOrder = await this.ordersService.findOrderByIdOrNumber(
-      createdOrder.id,
-      customerId,
-    );
-
-    const responsePayload = {
-      orderId: fullOrder.id,
-      orderNumber: fullOrder.orderNumber,
-      status: fullOrder.status,
-      paymentStatus: fullOrder.paymentStatus,
-      paymentMethod: fullOrder.paymentMethod,
-      subtotal: Number(fullOrder.subtotal),
-      discountAmount: Number(fullOrder.discountAmount),
-      shippingFee: Number(fullOrder.shippingFee),
-      totalAmount: Number(fullOrder.totalAmount),
-      couponCode: fullOrder.couponCode,
-      reservationId: fullOrder.reservationId,
-      items: fullOrder.items.map((i) => ({
-        id: i.id,
-        productId: i.productId,
-        variantId: i.variantId,
-        productName: i.productName,
-        variantName: i.variantName,
-        sku: i.sku,
-        unitPrice: Number(i.unitPrice),
-        quantity: i.quantity,
-        lineTotal: Number(i.lineTotal),
-      })),
-      shippingAddress: fullOrder.shippingAddress,
-      payment: createdPaymentResult?.paymentRecord
-        ? {
-            id: createdPaymentResult.paymentRecord.id,
-            provider: createdPaymentResult.paymentRecord.provider,
-            method: createdPaymentResult.paymentRecord.method,
-            amount: Number(createdPaymentResult.paymentRecord.amount),
-            status: createdPaymentResult.paymentRecord.status,
-            transactionReference:
-              createdPaymentResult.paymentRecord.transactionReference,
-          }
-        : null,
-      paymentDetails: createdPaymentResult?.paymentDetails || null,
-      paymentInstruction: createdPaymentResult?.instruction || null,
-      createdAt: fullOrder.createdAt.toISOString(),
-    };
-
-    // 11. Lưu Idempotency Record
-    if (idempotencyKey) {
-      try {
-        await this.prisma.idempotencyRecord.create({
-          data: {
-            customerId,
-            idempotencyKey,
-            requestPath: '/api/v1/checkout',
-            responseBody: JSON.stringify(responsePayload),
-            statusCode: 201,
-            orderId: fullOrder.id,
-          },
-        });
-      } catch (e) {
-        // Không block response nếu lưu idempotency record lỗi
-        logger.warn(
-          `Không thể lưu bản ghi Idempotency: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
-    }
-
-    return responsePayload;
   }
 
   /**
@@ -495,77 +819,107 @@ export class CheckoutService {
   }
 
   /**
-   * Lấy địa chỉ của khách hàng từ Customer Service
+   * Lấy địa chỉ của khách hàng từ Customer Service qua endpoint nội bộ an toàn (chống IDOR)
    */
   private async fetchCustomerAddress(
-    _customerId: string,
+    customerId: string,
     addressId: string,
-  ): Promise<CheckoutShippingAddressDto | null> {
+  ): Promise<CheckoutShippingAddressDto> {
+    let res: Response;
     try {
-      const res = await fetch(
-        `${this.customerServiceUrl}/api/v1/customers/addresses/${addressId}`,
+      res = await fetch(
+        `${this.customerServiceUrl}/internal/v1/customers/${encodeURIComponent(customerId)}/addresses/${encodeURIComponent(addressId)}`,
         {
           headers: {
-            'X-Internal-Secret': this.internalSecret,
+            'x-internal-secret': this.internalSecret,
           },
         },
       );
-      if (!res.ok) {
-        return null;
-      }
-      const json = (await res.json()) as Record<string, unknown>;
-      return (json.data || json) as unknown as CheckoutShippingAddressDto;
-    } catch {
-      return null;
+    } catch (err) {
+      logger.error('Không thể kết nối đến Customer Service để xác thực địa chỉ:', err);
+      throw new InternalServerErrorException(
+        'Không thể kết nối đến Customer Service để xác thực địa chỉ.',
+      );
     }
+
+    if (res.status === 404) {
+      throw new BadRequestException(
+        'Địa chỉ giao hàng không hợp lệ hoặc không thuộc về tài khoản của bạn.',
+      );
+    }
+
+    if (res.status === 403) {
+      logger.error('Lỗi xác thực internal-secret khi gọi customer-service: 403 Forbidden');
+      throw new InternalServerErrorException('Lỗi xác thực giao tiếp dịch vụ nội bộ.');
+    }
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      logger.error(`Lỗi từ Customer Service (${res.status}): ${errText}`);
+      throw new BadRequestException('Không thể xác thực thông tin địa chỉ giao hàng.');
+    }
+
+    const json = (await res.json()) as Record<string, unknown>;
+    const addr = (json.data || json) as Record<string, unknown>;
+
+    return {
+      recipientName: String(addr.recipientName || ''),
+      phone: String(addr.phone || ''),
+      provinceCode: String(addr.provinceCode || ''),
+      provinceName: String(addr.provinceName || ''),
+      districtCode: String(addr.districtCode || ''),
+      districtName: String(addr.districtName || ''),
+      wardCode: String(addr.wardCode || ''),
+      wardName: String(addr.wardName || ''),
+      addressLine: String(addr.addressLine || ''),
+    };
   }
 
   /**
    * Gọi internal API của Inventory Service để tạm giữ tồn kho (Reserve)
    */
-  private async reserveInventoryItem(payload: {
-    reservationId: string;
-    productId: string;
-    variantId: string;
-    quantity: number;
-    referenceType: string;
-    referenceId: string;
-  }): Promise<boolean> {
+  private async reserveInventoryItem(
+    payload: {
+      reservationId: string;
+      productId: string;
+      variantId: string;
+      quantity: number;
+      referenceType: string;
+      referenceId: string;
+    },
+    requestId?: string,
+  ): Promise<boolean> {
     try {
       const res = await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/reserve`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Internal-Secret': this.internalSecret,
+          ...(requestId ? { 'X-Request-Id': requestId } : {}),
         },
         body: JSON.stringify(payload),
       });
 
       return res.ok;
     } catch (err) {
-      logger.error('Lỗi khi gọi inventory-service reserve:', err);
+      logger.error('Lỗi khi gọi inventory-service reserve:', {
+        requestId,
+        reservationId: payload.reservationId,
+        error: String(err),
+      });
       return false;
     }
   }
 
   /**
    * Gọi internal API của Inventory Service để giải phóng tồn kho (Compensation Release)
+   * Non-2xx được xem là thất bại và ủy quyền xử lý bồi hoàn.
    */
   private async releaseInventoryItem(
     reservationId: string,
     reason: string,
-  ): Promise<void> {
-    try {
-      await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/release`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Internal-Secret': this.internalSecret,
-        },
-        body: JSON.stringify({ reservationId, reason }),
-      });
-    } catch (err) {
-      logger.error('Lỗi khi giải phóng tồn kho bồi hoàn:', err);
-    }
+    requestId?: string,
+  ): Promise<boolean> {
+    return this.compensationService.callInventoryRelease(reservationId, reason, requestId);
   }
 }

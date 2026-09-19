@@ -10,14 +10,17 @@ import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RequestWithId } from '../common/middleware/request-id.middleware.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway:content-proxy');
 
 @ApiTags('Content, Blog & Banners (Proxy)')
 @Controller('api/v1')
 export class ContentProxyController {
-  private readonly contentServiceUrl =
-    process.env.CONTENT_SERVICE_URL || 'http://localhost:4006';
+  private readonly contentServiceUrl = getServiceUrl(
+    'CONTENT_SERVICE_URL',
+    CANONICAL_PORTS.CONTENT_SERVICE,
+  );
 
   @All(['posts', 'posts/*'])
   async handlePosts(

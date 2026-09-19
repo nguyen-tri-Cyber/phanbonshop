@@ -266,8 +266,14 @@ async function run() {
   const checkoutResults = await Promise.all(checkoutPromises);
   console.log('Checkout results summary:', checkoutResults.map((r) => ({ status: r.status, msg: r.data?.error?.message || r.data?.message || 'OK' })));
   const okCheckouts = checkoutResults.filter((r) => r.status === 200 || r.status === 201);
+  const inProgressCheckouts = checkoutResults.filter((r) => r.status === 409);
   console.log(`Số phản hồi thành công (200/201): ${okCheckouts.length}/10`);
-  assert.strictEqual(okCheckouts.length, 10, 'Tất cả 10 request concurrent phải trả về 200/201');
+  assert.strictEqual(okCheckouts.length, 1, 'Chỉ 1 request concurrent được quyền tạo checkout cho cùng Idempotency-Key');
+  assert.strictEqual(
+    inProgressCheckouts.length,
+    9,
+    '9 request concurrent còn lại phải bị chặn an toàn bằng 409 để không tạo side effect trùng lặp',
+  );
 
   // Lấy ra danh sách orderId từ các kết quả
   const orderIds = new Set(

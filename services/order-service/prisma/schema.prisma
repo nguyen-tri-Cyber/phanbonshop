@@ -46,6 +46,23 @@ enum CouponType {
   FREE_SHIPPING
 }
 
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum CompensationTaskType {
+  RELEASE_INVENTORY
+}
+
+enum CompensationTaskStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Cart {
   id        String     @id @default(uuid())
   userId    String     @unique
@@ -196,17 +213,22 @@ model CouponUsage {
 }
 
 model IdempotencyRecord {
-  id             String   @id @default(uuid())
+  id             String            @id @default(uuid())
   customerId     String
-  idempotencyKey String   @db.VarChar(128)
-  requestPath    String   @db.VarChar(255)
-  responseBody   String   @db.LongText
-  statusCode     Int
+  idempotencyKey String            @db.VarChar(128)
+  requestPath    String            @db.VarChar(255)
+  requestHash    String            @db.VarChar(64)
+  status         IdempotencyStatus @default(PROCESSING)
+  responseBody   String?           @db.LongText
+  statusCode     Int?
   orderId        String?
-  createdAt      DateTime @default(now())
+  expiresAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
   @@unique([customerId, idempotencyKey])
   @@index([customerId])
+  @@index([status, createdAt])
   @@map("idempotency_records")
 }
 
@@ -264,4 +286,22 @@ model AuditLog {
   @@index([actorId])
   @@index([action])
   @@map("audit_logs")
+}
+
+model CompensationTask {
+  id            String                 @id @default(uuid())
+  type          CompensationTaskType   @default(RELEASE_INVENTORY)
+  payload       String                 @db.LongText
+  status        CompensationTaskStatus @default(PENDING)
+  retryCount    Int                    @default(0)
+  maxRetries    Int                    @default(5)
+  nextAttemptAt DateTime               @default(now())
+  lastError     String?                @db.Text
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  completedAt   DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([type, status])
+  @@map("compensation_tasks")
 }

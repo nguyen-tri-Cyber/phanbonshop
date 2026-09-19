@@ -57,7 +57,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const description =
     brand.description ||
     `Sản phẩm phân bón chính hãng thương hiệu ${brand.name} phân phối trực tiếp từ nhà máy có tem bảo hành chất lượng.`;
-  const canonicalUrl = `http://localhost:3000/thuong-hieu/${brand.slug}`;
+  const canonicalUrl = `/thuong-hieu/${brand.slug}`;
   const ogImages = brand.logoUrl ? [{ url: brand.logoUrl, alt: brand.name }] : [];
 
   return {

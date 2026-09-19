@@ -9,10 +9,28 @@ import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor.js
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter.js';
 import { createLogger } from '@phanbonshop/logger';
+import {
+  validateStartupEnv,
+  getCorsOrigins,
+  CANONICAL_PORTS,
+} from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway');
 
 async function bootstrap(): Promise<void> {
+  // 0. Startup Environment Validation
+  validateStartupEnv('api-gateway', {
+    requiredVars: ['INTERNAL_SERVICE_SECRET'],
+    requiredServiceUrls: [
+      'AUTH_SERVICE_URL',
+      'PRODUCT_SERVICE_URL',
+      'ORDER_SERVICE_URL',
+      'INVENTORY_SERVICE_URL',
+      'CUSTOMER_SERVICE_URL',
+      'CONTENT_SERVICE_URL',
+    ],
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
@@ -28,9 +46,9 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
-  // 2. CORS: Cho phép local frontend http://localhost:3000
+  // 2. CORS: Whitelist domain theo cấu hình (mặc định http://localhost:3000 trong dev)
   app.enableCors({
-    origin: ['http://localhost:3000'],
+    origin: getCorsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret'],
     exposedHeaders: ['X-Request-ID'],
@@ -70,7 +88,7 @@ async function bootstrap(): Promise<void> {
   SwaggerModule.setup('docs', app, document);
 
   // 7. Lắng nghe Port 8080
-  const port = Number(process.env.GATEWAY_PORT) || 8080;
+  const port = Number(process.env.GATEWAY_PORT) || CANONICAL_PORTS.GATEWAY;
   await app.listen(port, '0.0.0.0');
 
   logger.info(`API Gateway đã khởi động thành công trên cổng ${port}`, {

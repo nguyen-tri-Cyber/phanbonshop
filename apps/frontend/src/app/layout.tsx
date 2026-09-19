@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     title: 'Phân Bón Shop - Nền Tảng TMĐT Phân Bón Việt Nam',
     description:
       'Sàn thương mại điện tử chuyên cung ứng phân bón NPK, phân hữu cơ vi sinh, phân bón lá chính hãng Đầu Trâu, Đạm Phú Mỹ, PVCFC.',
-    url: 'http://localhost:3000',
+    url: process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000',
     siteName: 'Phân Bón Shop',
     locale: 'vi_VN',
     type: 'website',

@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaClient } from '../../generated/client/index.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getDatabaseUrl } from '@phanbonshop/config';
 
 const logger = createLogger('inventory-service:prisma');
 
@@ -10,9 +11,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     super({
       datasources: {
         db: {
-          url:
-            process.env.INVENTORY_DATABASE_URL ||
-            'mysql://phanbon_user:phanbon_secret@localhost:3307/inventory_db',
+          url: getDatabaseUrl('INVENTORY_DATABASE_URL', 'inventory_db'),
         },
       },
       log: ['error', 'warn'],

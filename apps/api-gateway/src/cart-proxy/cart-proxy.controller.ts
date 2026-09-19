@@ -10,14 +10,17 @@ import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RequestWithId } from '../common/middleware/request-id.middleware.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway:cart-proxy');
 
 @ApiTags('Cart (Proxy)')
 @Controller()
 export class CartProxyController {
-  private readonly orderServiceUrl =
-    process.env.ORDER_SERVICE_URL || 'http://localhost:3003';
+  private readonly orderServiceUrl = getServiceUrl(
+    'ORDER_SERVICE_URL',
+    CANONICAL_PORTS.ORDER_SERVICE,
+  );
 
   @All(['api/v1/cart', 'api/v1/cart/*'])
   async handleCart(

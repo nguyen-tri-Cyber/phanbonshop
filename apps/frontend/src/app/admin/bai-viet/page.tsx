@@ -173,7 +173,8 @@ export default function AdminPostsPage() {
       formData.append('file', file);
 
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:8080/api/v1/posts/upload-image', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+      const response = await fetch(`${apiUrl}/posts/upload-image`, {
         method: 'POST',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

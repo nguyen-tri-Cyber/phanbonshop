@@ -4,10 +4,22 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { createLogger } from '@phanbonshop/logger';
+import { validateStartupEnv, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('order-service');
 
 async function bootstrap(): Promise<void> {
+  // 0. Startup Environment Validation
+  validateStartupEnv('order-service', {
+    requiredVars: ['JWT_ACCESS_SECRET', 'INTERNAL_SERVICE_SECRET'],
+    requiredDatabaseUrl: 'ORDER_DATABASE_URL',
+    requiredServiceUrls: [
+      'PRODUCT_SERVICE_URL',
+      'INVENTORY_SERVICE_URL',
+      'CUSTOMER_SERVICE_URL',
+    ],
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
@@ -32,7 +44,7 @@ async function bootstrap(): Promise<void> {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  const port = Number(process.env.ORDER_SERVICE_PORT) || 3003;
+  const port = Number(process.env.ORDER_SERVICE_PORT) || CANONICAL_PORTS.ORDER_SERVICE;
   await app.listen(port, '0.0.0.0');
 
   logger.info(`Order & Cart Service đã khởi động thành công trên cổng ${port}`, {

@@ -57,7 +57,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const description =
     category.description ||
     `Tổng hợp tất cả sản phẩm ${category.name} chính hãng chất lượng cao, đúng quy chuẩn dinh dưỡng nông nghiệp.`;
-  const canonicalUrl = `http://localhost:3000/danh-muc/${category.slug}`;
+  const canonicalUrl = `/danh-muc/${category.slug}`;
 
   return {
     title,

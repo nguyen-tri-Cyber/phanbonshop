@@ -10,14 +10,17 @@ import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RequestWithId } from '../common/middleware/request-id.middleware.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway:product-proxy');
 
 @ApiTags('Products, Categories & Brands (Proxy)')
 @Controller('api/v1')
 export class ProductProxyController {
-  private readonly productServiceUrl =
-    process.env.PRODUCT_SERVICE_URL || 'http://localhost:3002';
+  private readonly productServiceUrl = getServiceUrl(
+    'PRODUCT_SERVICE_URL',
+    CANONICAL_PORTS.PRODUCT_SERVICE,
+  );
 
   @All(['products', 'products/*'])
   async handleProducts(

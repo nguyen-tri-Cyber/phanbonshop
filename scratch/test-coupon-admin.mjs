@@ -92,14 +92,29 @@ async function runCouponTests() {
 
   // 4. Lấy một sản phẩm và variant thật để test checkout
   console.log('\n4. Lấy sản phẩm trong DB để test checkout áp dụng coupon...');
-  const productsRes = await request(`${BASE_URL}/products?limit=1`);
+  const productsRes = await request(`${BASE_URL}/products?limit=20`);
   if (!productsRes.ok || !productsRes.data?.items?.length) {
     throw new Error('Không tìm thấy sản phẩm nào trong DB');
   }
-  const product = productsRes.data.items[0];
-  const variant = product.variants?.[0];
-  if (!variant) {
-    throw new Error('Sản phẩm không có variant để test');
+
+  let product;
+  let variant;
+  for (const candidate of productsRes.data.items) {
+    const inventoryRes = await request(`${BASE_URL}/inventory/products/${candidate.id}`);
+    const rows = Array.isArray(inventoryRes.data) ? inventoryRes.data : [];
+    const stockedVariant = candidate.variants?.find((item) => {
+      const row = rows.find((inventory) => inventory.variantId === item.id);
+      return row && Number(row.availableQuantity) >= 1;
+    });
+    if (stockedVariant) {
+      product = candidate;
+      variant = stockedVariant;
+      break;
+    }
+  }
+
+  if (!product || !variant) {
+    throw new Error('Không tìm thấy variant còn tồn kho để test coupon checkout');
   }
   const unitPrice = Number(variant.price);
   console.log(`   Sản phẩm: "${product.name}", Variant: ${variant.packageSize}, Giá: ${unitPrice}`);

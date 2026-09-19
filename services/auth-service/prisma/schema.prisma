@@ -40,7 +40,8 @@ model User {
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
-  refreshTokens   RefreshTokenSession[]
+  refreshTokens       RefreshTokenSession[]
+  passwordResetTokens PasswordResetToken[]
 
   @@map("users")
 }
@@ -60,6 +61,21 @@ model RefreshTokenSession {
   @@index([userId])
   @@index([tokenHash])
   @@map("refresh_token_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(128) // SHA-256 hash của reset token
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("password_reset_tokens")
 }
 
 model AuditLog {

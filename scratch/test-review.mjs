@@ -46,14 +46,34 @@ async function runReviewTests() {
 
   // 2. Lấy 2 sản phẩm khác nhau từ DB (Product A để mua thật, Product B để thử fake)
   console.log('2. Lấy 2 sản phẩm khác nhau từ DB để chuẩn bị test...');
-  const productsRes = await request(`${BASE_URL}/products?limit=5`);
+  const productsRes = await request(`${BASE_URL}/products?limit=20`);
   if (!productsRes.ok || !productsRes.data?.items?.length || productsRes.data.items.length < 2) {
     throw new Error('Cần tối thiểu 2 sản phẩm trong DB để kiểm thử');
   }
 
-  const productA = productsRes.data.items[0];
-  const variantA = productA.variants?.[0];
-  const productB = productsRes.data.items[1];
+  let productA;
+  let variantA;
+  for (const candidate of productsRes.data.items) {
+    const inventoryRes = await request(`${BASE_URL}/inventory/products/${candidate.id}`);
+    const rows = Array.isArray(inventoryRes.data) ? inventoryRes.data : [];
+    const stockedVariant = candidate.variants?.find((variant) => {
+      const row = rows.find((inventory) => inventory.variantId === variant.id);
+      return row && Number(row.availableQuantity) >= 1;
+    });
+    if (stockedVariant) {
+      productA = candidate;
+      variantA = stockedVariant;
+      break;
+    }
+  }
+  if (!productA || !variantA) {
+    throw new Error('Không tìm thấy sản phẩm còn tồn kho để mua thật trước khi review');
+  }
+
+  const productB = productsRes.data.items.find((product) => product.id !== productA.id);
+  if (!productB) {
+    throw new Error('Cần sản phẩm B khác sản phẩm A để kiểm thử review chưa mua');
+  }
   console.log(`   Sản phẩm A (sẽ mua thật): [${productA.id}] ${productA.name}`);
   console.log(`   Sản phẩm B (chưa từng mua): [${productB.id}] ${productB.name}\n`);
 

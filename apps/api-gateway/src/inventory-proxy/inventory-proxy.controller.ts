@@ -10,14 +10,17 @@ import { ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RequestWithId } from '../common/middleware/request-id.middleware.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 
 const logger = createLogger('api-gateway:inventory-proxy');
 
 @ApiTags('Inventory (Proxy)')
 @Controller()
 export class InventoryProxyController {
-  private readonly inventoryServiceUrl =
-    process.env.INVENTORY_SERVICE_URL || 'http://localhost:3004';
+  private readonly inventoryServiceUrl = getServiceUrl(
+    'INVENTORY_SERVICE_URL',
+    CANONICAL_PORTS.INVENTORY_SERVICE,
+  );
 
   @All(['api/v1/inventory', 'api/v1/inventory/*'])
   async handlePublicInventory(

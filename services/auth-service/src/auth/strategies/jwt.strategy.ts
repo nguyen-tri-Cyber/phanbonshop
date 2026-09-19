@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuthenticatedUser } from '../decorators/current-user.decorator.js';
+import { getEnvString } from '@phanbonshop/config';
 
 export interface JwtPayload {
   sub: string;
@@ -20,7 +21,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
         (req) => req?.cookies?.access_token || null,
       ]),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_ACCESS_SECRET || 'super_secret_access_key_phanbonshop_2026',
+      secretOrKey: getEnvString('JWT_ACCESS_SECRET'),
     });
   }
 

@@ -4,16 +4,28 @@ import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { createLogger } from '@phanbonshop/logger';
+import {
+  validateStartupEnv,
+  getCorsOrigins,
+  CANONICAL_PORTS,
+} from '@phanbonshop/config';
 
 const logger = createLogger('content-service');
 
 async function bootstrap(): Promise<void> {
+  // 1. Startup Environment Validation
+  validateStartupEnv('content-service', {
+    requiredVars: ['JWT_ACCESS_SECRET', 'INTERNAL_SERVICE_SECRET'],
+    requiredDatabaseUrl: 'CONTENT_DATABASE_URL',
+  });
+
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
 
+  // 2. CORS: Whitelist domain cụ thể (không dùng wildcard '*' kèm credentials: true)
   app.enableCors({
-    origin: '*',
+    origin: getCorsOrigins(),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
@@ -38,7 +50,7 @@ async function bootstrap(): Promise<void> {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
 
-  const port = Number(process.env.CONTENT_SERVICE_PORT) || 4006;
+  const port = Number(process.env.CONTENT_SERVICE_PORT) || CANONICAL_PORTS.CONTENT_SERVICE;
   await app.listen(port, '0.0.0.0');
 
   logger.info(`Content Service đã khởi động thành công trên cổng ${port}`, {

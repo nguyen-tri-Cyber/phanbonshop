@@ -17,6 +17,13 @@ const prisma = new PrismaClient({
 });
 
 async function main(): Promise<void> {
+  // BẢO VỆ AN TOÀN TUYỆT ĐỐI CHO PRODUCTION: Từ chối chạy seed trên production!
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      '[SECURITY FATAL] Refusing to seed database in PRODUCTION environment! Database seeding is strictly for development and testing.',
+    );
+  }
+
   console.log('--- [SEED] Bắt đầu khởi tạo dữ liệu mẫu cho product_db ---');
 
   // 1. Dọn sạch dữ liệu cũ theo thứ tự ràng buộc

@@ -73,7 +73,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     product.seoDescription ||
     product.shortDescription ||
     `Mua ${product.name} chính hãng giá tốt, xuất xứ rõ ràng, có bảo hành mùa vụ tại Phân Bón Shop.`;
-  const canonicalUrl = `http://localhost:3000/san-pham/${product.slug}`;
+  const canonicalUrl = `/san-pham/${product.slug}`;
 
   const primaryImage = product.images?.find((img) => img.isPrimary) || product.images?.[0];
   const ogImages = primaryImage?.url ? [{ url: primaryImage.url, alt: product.name }] : [];
@@ -134,18 +134,19 @@ export default async function ProductPage({ params }: Props) {
   ]);
 
   const primaryVariant = product.variants?.[0];
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000').replace(/\/$/, '');
   const price = Number(primaryVariant?.price || product.price);
   const totalAvailableStock = inventory.reduce(
     (sum, item) => sum + item.availableQuantity,
     0,
   );
 
-  // Structured Data (JSON-LD) - Product Schema
+  // Product Schema.org JSON-LD
   const productJsonLd: Record<string, unknown> = {
     '@context': 'https://schema.org',
     '@type': 'Product',
     name: product.name,
-    description: product.shortDescription || product.description || product.name,
+    description: product.shortDescription || product.description,
     image: product.images?.map((img) => img.url) || [],
     sku: primaryVariant?.sku || product.sku,
     offers: {
@@ -156,7 +157,7 @@ export default async function ProductPage({ params }: Props) {
         totalAvailableStock > 0
           ? 'https://schema.org/InStock'
           : 'https://schema.org/OutOfStock',
-      url: `http://localhost:3000/san-pham/${product.slug}`,
+      url: `${siteUrl}/san-pham/${product.slug}`,
     },
   };
 
@@ -185,21 +186,21 @@ export default async function ProductPage({ params }: Props) {
         '@type': 'ListItem',
         position: 1,
         name: 'Trang chủ',
-        item: 'http://localhost:3000',
+        item: siteUrl,
       },
       {
         '@type': 'ListItem',
         position: 2,
         name: product.category?.name || 'Sản phẩm',
         item: product.category
-          ? `http://localhost:3000/danh-muc/${product.category.slug}`
-          : 'http://localhost:3000/san-pham',
+          ? `${siteUrl}/danh-muc/${product.category.slug}`
+          : `${siteUrl}/san-pham`,
       },
       {
         '@type': 'ListItem',
         position: 3,
         name: product.name,
-        item: `http://localhost:3000/san-pham/${product.slug}`,
+        item: `${siteUrl}/san-pham/${product.slug}`,
       },
     ],
   };

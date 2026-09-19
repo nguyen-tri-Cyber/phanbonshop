@@ -48,7 +48,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
   const description = q
     ? `Kết quả tra cứu sản phẩm phân bón phù hợp với từ khóa "${q}". Sản phẩm chính hãng có kiểm định chất lượng.`
     : 'Tra cứu nhanh danh mục phân bón NPK, Đạm, Hữu cơ vi sinh từ các nhà sản xuất hàng đầu.';
-  const canonicalUrl = `http://localhost:3000/tim-kiem${q ? `?q=${encodeURIComponent(q)}` : ''}`;
+  const canonicalUrl = `/tim-kiem${q ? `?q=${encodeURIComponent(q)}` : ''}`;
 
   return {
     title,
