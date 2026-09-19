@@ -1,6 +1,14 @@
+# ==============================================================================
+# Phan Bon Shop — Chạy toàn bộ hệ thống bằng một lệnh duy nhất:
+#
+#   docker compose up --build
+#
+# File này tích hợp: Infrastructure + Migration + 8 App Services + Nginx
+# ==============================================================================
+
 services:
   # ==========================================
-  # 1. Cơ sở dữ liệu chính: MySQL 8.0
+  # 1. MySQL 8.0 (Database Engine)
   # ==========================================
   mysql:
     image: mysql:8.0
@@ -11,7 +19,6 @@ services:
       --collation-server=utf8mb4_unicode_ci
       --default-time-zone=+07:00
     ports:
-      # Ánh xạ ra host port 3307 để tránh xung đột với MySQL port 3306 nội bộ của máy host
       - "${MYSQL_PORT:-3307}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_secret}
@@ -26,12 +33,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-      start_period: 10s
+      start_period: 15s
     networks:
-      - phanbon_network
+      - app_network
 
   # ==========================================
-  # 2. Bộ nhớ đệm & Phiên làm việc: Redis 7
+  # 2. Redis 7 (Cache & Distributed Locks)
   # ==========================================
   redis:
     image: redis:7-alpine
@@ -52,10 +59,10 @@ services:
       retries: 5
       start_period: 3s
     networks:
-      - phanbon_network
+      - app_network
 
   # ==========================================
-  # 3. Lưu trữ tệp tin & Chứng từ: MinIO Object Storage
+  # 3. MinIO Object Storage
   # ==========================================
   minio:
     image: quay.io/minio/minio:latest
@@ -77,14 +84,15 @@ services:
       retries: 5
       start_period: 5s
     networks:
-      - phanbon_network
+      - app_network
 
   # ==========================================
-  # 4. Tự động khởi tạo Buckets cho MinIO
+  # 4. MinIO Bucket Initialization
   # ==========================================
   minio-init-buckets:
     image: quay.io/minio/mc:latest
     container_name: phanbonshop_minio_init
+    restart: "no"
     depends_on:
       minio:
         condition: service_healthy
@@ -96,18 +104,393 @@ services:
       /usr/bin/mc mb --ignore-existing myminio/product-images;
       echo 'Tạo bucket content-images...';
       /usr/bin/mc mb --ignore-existing myminio/content-images;
-      echo 'Cấu hình quyền đọc công khai cho hình ảnh sản phẩm và bài viết...';
       /usr/bin/mc anonymous set download myminio/product-images;
       /usr/bin/mc anonymous set download myminio/content-images;
       echo 'Khởi tạo bucket MinIO hoàn tất!';
       exit 0;
       "
     networks:
-      - phanbon_network
+      - app_network
+
+  # ==========================================
+  # 5. Database Migration (One-shot Init Container)
+  # ==========================================
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.migrate
+    container_name: phanbonshop_migrate
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_USER: ${MYSQL_USER:-phanbon_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-phanbon_secret}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+    networks:
+      - app_network
+
+  # ==========================================
+  # 6. Auth Service
+  # ==========================================
+  auth:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/auth-service
+        SERVICE_NAME: auth-service
+        PORT: 3001
+    container_name: phanbonshop_auth
+    restart: unless-stopped
+    expose:
+      - "3001"
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/auth_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your_jwt_refresh_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 7. Product Service
+  # ==========================================
+  product:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/product-service
+        SERVICE_NAME: product-service
+        PORT: 3002
+    container_name: phanbonshop_product
+    restart: unless-stopped
+    expose:
+      - "3002"
+    environment:
+      NODE_ENV: production
+      PORT: 3002
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/product_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-admin123456}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 8. Order Service
+  # ==========================================
+  order:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/order-service
+        SERVICE_NAME: order-service
+        PORT: 3003
+    container_name: phanbonshop_order
+    restart: unless-stopped
+    expose:
+      - "3003"
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/order_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      INVENTORY_SERVICE_URL: http://inventory:3004
+      CUSTOMER_SERVICE_URL: http://customer:3005
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      customer:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 9. Inventory Service
+  # ==========================================
+  inventory:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/inventory-service
+        SERVICE_NAME: inventory-service
+        PORT: 3004
+    container_name: phanbonshop_inventory
+    restart: unless-stopped
+    expose:
+      - "3004"
+    environment:
+      NODE_ENV: production
+      PORT: 3004
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/inventory_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 10. Customer Service
+  # ==========================================
+  customer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/customer-service
+        SERVICE_NAME: customer-service
+        PORT: 3005
+    container_name: phanbonshop_customer
+    restart: unless-stopped
+    expose:
+      - "3005"
+    environment:
+      NODE_ENV: production
+      PORT: 3005
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/customer_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 11. Content Service
+  # ==========================================
+  content:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: services/content-service
+        SERVICE_NAME: content-service
+        PORT: 3006
+    container_name: phanbonshop_content
+    restart: unless-stopped
+    expose:
+      - "3006"
+    environment:
+      NODE_ENV: production
+      PORT: 3006
+      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/content_db
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-admin123456}
+      CORS_ORIGIN: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3006/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 12. API Gateway
+  # ==========================================
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+      args:
+        SERVICE_PATH: apps/api-gateway
+        SERVICE_NAME: api-gateway
+        PORT: 8080
+    container_name: phanbonshop_gateway
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      AUTH_SERVICE_URL: http://auth:3001
+      PRODUCT_SERVICE_URL: http://product:3002
+      ORDER_SERVICE_URL: http://order:3003
+      INVENTORY_SERVICE_URL: http://inventory:3004
+      CUSTOMER_SERVICE_URL: http://customer:3005
+      CONTENT_SERVICE_URL: http://content:3006
+      JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+    depends_on:
+      auth:
+        condition: service_healthy
+      product:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
+      customer:
+        condition: service_healthy
+      content:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ==========================================
+  # 13. Frontend (Next.js Standalone)
+  # ==========================================
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    container_name: phanbonshop_frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_GATEWAY_URL: /api
+      INTERNAL_GATEWAY_URL: http://gateway:8080
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok || r.status === 404 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ==========================================
+  # 14. Reverse Proxy (Nginx — Public Entrypoint)
+  # ==========================================
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: phanbonshop_proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 networks:
-  phanbon_network:
-    name: phanbon_network
+  app_network:
+    name: phanbonshop_network
     driver: bridge
 
 volumes:

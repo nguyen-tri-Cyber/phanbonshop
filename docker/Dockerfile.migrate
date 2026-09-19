@@ -1,0 +1,86 @@
+# ==============================================================================
+# One-shot init container: runs Prisma migrate deploy for all 6 services
+# Exits 0 on success so depends_on: service_completed_successfully works.
+# ==============================================================================
+
+FROM node:20-alpine AS builder
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+
+# Copy manifests
+COPY package.json package-lock.json ./
+COPY packages ./packages
+COPY apps/api-gateway/package.json ./apps/api-gateway/
+COPY apps/frontend/package.json ./apps/frontend/
+COPY services/auth-service/package.json ./services/auth-service/
+COPY services/product-service/package.json ./services/product-service/
+COPY services/order-service/package.json ./services/order-service/
+COPY services/inventory-service/package.json ./services/inventory-service/
+COPY services/customer-service/package.json ./services/customer-service/
+COPY services/content-service/package.json ./services/content-service/
+
+RUN npm ci --ignore-scripts
+
+# Copy ALL prisma schemas and migrations
+COPY services/auth-service/prisma      ./services/auth-service/prisma
+COPY services/product-service/prisma   ./services/product-service/prisma
+COPY services/order-service/prisma     ./services/order-service/prisma
+COPY services/inventory-service/prisma ./services/inventory-service/prisma
+COPY services/customer-service/prisma  ./services/customer-service/prisma
+COPY services/content-service/prisma   ./services/content-service/prisma
+
+# Copy migration script
+COPY scripts ./scripts
+COPY packages ./packages
+
+# Runner — minimal image just for running prisma migrate deploy
+FROM node:20-alpine AS runner
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/services/auth-service/prisma      ./services/auth-service/prisma
+COPY --from=builder /app/services/product-service/prisma   ./services/product-service/prisma
+COPY --from=builder /app/services/order-service/prisma     ./services/order-service/prisma
+COPY --from=builder /app/services/inventory-service/prisma ./services/inventory-service/prisma
+COPY --from=builder /app/services/customer-service/prisma  ./services/customer-service/prisma
+COPY --from=builder /app/services/content-service/prisma   ./services/content-service/prisma
+
+# Inline migration script — runs prisma migrate deploy for each service
+CMD ["sh", "-c", "\
+  set -e; \
+  echo '================================================================'; \
+  echo 'RUNNING DATABASE MIGRATIONS FOR ALL SERVICES'; \
+  echo '================================================================'; \
+  \
+  DB_BASE=\"mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@${MYSQL_HOST}:${MYSQL_PORT}\"; \
+  \
+  echo '▶ Migrating auth_db...'; \
+  DATABASE_URL=\"${DB_BASE}/auth_db\" npx prisma migrate deploy --schema=services/auth-service/prisma/schema.prisma; \
+  echo '✔ auth_db done'; \
+  \
+  echo '▶ Migrating product_db...'; \
+  DATABASE_URL=\"${DB_BASE}/product_db\" npx prisma migrate deploy --schema=services/product-service/prisma/schema.prisma; \
+  echo '✔ product_db done'; \
+  \
+  echo '▶ Migrating order_db...'; \
+  DATABASE_URL=\"${DB_BASE}/order_db\" npx prisma migrate deploy --schema=services/order-service/prisma/schema.prisma; \
+  echo '✔ order_db done'; \
+  \
+  echo '▶ Migrating inventory_db...'; \
+  DATABASE_URL=\"${DB_BASE}/inventory_db\" npx prisma migrate deploy --schema=services/inventory-service/prisma/schema.prisma; \
+  echo '✔ inventory_db done'; \
+  \
+  echo '▶ Migrating customer_db...'; \
+  DATABASE_URL=\"${DB_BASE}/customer_db\" npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma; \
+  echo '✔ customer_db done'; \
+  \
+  echo '▶ Migrating content_db...'; \
+  DATABASE_URL=\"${DB_BASE}/content_db\" npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma; \
+  echo '✔ content_db done'; \
+  \
+  echo '================================================================'; \
+  echo 'ALL MIGRATIONS DEPLOYED SUCCESSFULLY'; \
+  echo '================================================================'; \
+"]

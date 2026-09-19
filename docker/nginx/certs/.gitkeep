@@ -1,0 +1,3 @@
+# Placeholder directory for SSL/TLS certificates.
+# In production, mount real certs here (e.g. from Let's Encrypt).
+# See docs/PRODUCTION_DEPLOYMENT.md for details.
