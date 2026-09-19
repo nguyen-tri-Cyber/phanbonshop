@@ -1,0 +1,27 @@
+{
+  "name": "@phanbonshop/shared-utils",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared utility functions for Phan Bon Shop",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/utils.test.mjs"
+  },
+  "dependencies": {
+    "@phanbonshop/shared-types": "*"
+  },
+  "devDependencies": {
+    "@phanbonshop/tsconfig": "*"
+  }
+}

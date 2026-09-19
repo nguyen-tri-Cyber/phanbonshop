@@ -1,0 +1,267 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("ORDER_DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  PACKING
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURNED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  COD
+  BANK_TRANSFER
+  VNPAY
+  MOMO
+  DEBT_PERIOD
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  FREE_SHIPPING
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@map("carts")
+}
+
+model CartItem {
+  id          String   @id @default(uuid())
+  cartId      String
+  variantId   String
+  productId   String
+  productName String   @db.VarChar(255)
+  productSlug String   @db.VarChar(255)
+  sku         String   @db.VarChar(100)
+  packageSize String   @db.VarChar(100)
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  imageUrl    String?  @db.VarChar(500)
+  quantity    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cart Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, variantId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Order {
+  id             String        @id @default(uuid())
+  orderNumber    String        @unique @db.VarChar(50)
+  customerId     String
+  status         OrderStatus   @default(PENDING)
+  paymentStatus  PaymentStatus @default(PENDING)
+  paymentMethod  PaymentMethod @default(COD)
+  subtotal       Decimal       @db.Decimal(12, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(12, 2)
+  shippingFee    Decimal       @default(0) @db.Decimal(12, 2)
+  totalAmount    Decimal       @db.Decimal(12, 2)
+  couponCode     String?       @db.VarChar(50)
+  customerNote   String?       @db.Text
+  reservationId  String?       @db.VarChar(100)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  items           OrderItem[]
+  shippingAddress OrderShippingAddress?
+  statusHistory   OrderStatusHistory[]
+  payments        PaymentRecord[]
+
+  @@index([customerId])
+  @@index([orderNumber])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String  @id @default(uuid())
+  orderId     String
+  productId   String
+  variantId   String
+  productName String  @db.VarChar(255)
+  variantName String  @db.VarChar(100)
+  sku         String  @db.VarChar(100)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  quantity    Int
+  lineTotal   Decimal @db.Decimal(12, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderShippingAddress {
+  id            String @id @default(uuid())
+  orderId       String @unique
+  recipientName String @db.VarChar(255)
+  phone         String @db.VarChar(50)
+  provinceCode  String @db.VarChar(20)
+  provinceName  String @db.VarChar(100)
+  districtCode  String @db.VarChar(20)
+  districtName  String @db.VarChar(100)
+  wardCode      String @db.VarChar(20)
+  wardName      String @db.VarChar(100)
+  addressLine   String @db.VarChar(500)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("order_shipping_addresses")
+}
+
+model OrderStatusHistory {
+  id         String   @id @default(uuid())
+  orderId    String
+  fromStatus String?  @db.VarChar(50)
+  toStatus   String   @db.VarChar(50)
+  changedBy  String?  @db.VarChar(100)
+  note       String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+model Coupon {
+  id                   String     @id @default(uuid())
+  code                 String     @unique @db.VarChar(50)
+  description          String?    @db.VarChar(255)
+  type                 CouponType
+  value                Decimal    @db.Decimal(12, 2)
+  minOrderAmount       Decimal?   @db.Decimal(12, 2)
+  maxDiscountAmount    Decimal?   @db.Decimal(12, 2)
+  enabled              Boolean    @default(true)
+  startDate            DateTime
+  endDate              DateTime
+  usageLimit           Int?
+  usedCount            Int        @default(0)
+  usagePerCustomer     Int        @default(1)
+  applicableCategories String?    @db.Text
+  applicableProducts   String?    @db.Text
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  usages CouponUsage[]
+
+  @@map("coupons")
+}
+
+model CouponUsage {
+  id         String   @id @default(uuid())
+  couponId   String
+  customerId String
+  orderId    String
+  usedAt     DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, customerId, orderId])
+  @@index([customerId])
+  @@map("coupon_usages")
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid())
+  customerId     String
+  idempotencyKey String   @db.VarChar(128)
+  requestPath    String   @db.VarChar(255)
+  responseBody   String   @db.LongText
+  statusCode     Int
+  orderId        String?
+  createdAt      DateTime @default(now())
+
+  @@unique([customerId, idempotencyKey])
+  @@index([customerId])
+  @@map("idempotency_records")
+}
+
+model PaymentRecord {
+  id                   String        @id @default(uuid())
+  orderId              String
+  provider             String        @default("MANUAL") @db.VarChar(50)
+  method               PaymentMethod @default(COD)
+  amount               Decimal       @db.Decimal(12, 2)
+  status               PaymentStatus @default(PENDING)
+  transactionReference String?       @db.VarChar(100)
+  paidAt               DateTime?
+  metadata             String?       @db.LongText
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  auditLogs PaymentAuditLog[]
+
+  @@index([orderId])
+  @@index([transactionReference])
+  @@map("payment_records")
+}
+
+model PaymentAuditLog {
+  id        String   @id @default(uuid())
+  paymentId String
+  action    String   @db.VarChar(50)
+  actorId   String   @db.VarChar(100)
+  actorRole String   @db.VarChar(50)
+  amount    Decimal? @db.Decimal(12, 2)
+  note      String?  @db.Text
+  createdAt DateTime @default(now())
+
+  payment PaymentRecord @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+  @@map("payment_audit_logs")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String   @db.VarChar(100)
+  actorRole  String   @db.VarChar(50)
+  action     String   @db.VarChar(100)
+  entityType String   @db.VarChar(100)
+  entityId   String   @db.VarChar(100)
+  oldValue   String?  @db.LongText
+  newValue   String?  @db.LongText
+  ipAddress  String?  @db.VarChar(50)
+  requestId  String?  @db.VarChar(100)
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+  @@map("audit_logs")
+}

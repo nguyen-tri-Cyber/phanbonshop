@@ -1,0 +1,12 @@
+{
+  "name": "@phanbonshop/eslint-config",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared ESLint config for Phan Bon Shop monorepo",
+  "main": "index.js",
+  "dependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint-config-prettier": "^9.1.0"
+  }
+}

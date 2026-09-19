@@ -1,0 +1,122 @@
+services:
+  # ==========================================
+  # 1. Cơ sở dữ liệu chính: MySQL 8.0
+  # ==========================================
+  mysql:
+    image: mysql:8.0
+    container_name: phanbonshop_mysql
+    restart: unless-stopped
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-time-zone=+07:00
+    ports:
+      # Ánh xạ ra host port 3307 để tránh xung đột với MySQL port 3306 nội bộ của máy host
+      - "${MYSQL_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_secret}
+      MYSQL_USER: ${MYSQL_USER:-phanbon_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-phanbon_secret}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_secret}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - phanbon_network
+
+  # ==========================================
+  # 2. Bộ nhớ đệm & Phiên làm việc: Redis 7
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: phanbonshop_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-redis_secret}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-redis_secret} ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    networks:
+      - phanbon_network
+
+  # ==========================================
+  # 3. Lưu trữ tệp tin & Chứng từ: MinIO Object Storage
+  # ==========================================
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: phanbonshop_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-admin123456}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - phanbon_network
+
+  # ==========================================
+  # 4. Tự động khởi tạo Buckets cho MinIO
+  # ==========================================
+  minio-init-buckets:
+    image: quay.io/minio/mc:latest
+    container_name: phanbonshop_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Chờ kết nối MinIO server...';
+      /usr/bin/mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-admin} $${MINIO_ROOT_PASSWORD:-admin123456};
+      echo 'Tạo bucket product-images...';
+      /usr/bin/mc mb --ignore-existing myminio/product-images;
+      echo 'Tạo bucket content-images...';
+      /usr/bin/mc mb --ignore-existing myminio/content-images;
+      echo 'Cấu hình quyền đọc công khai cho hình ảnh sản phẩm và bài viết...';
+      /usr/bin/mc anonymous set download myminio/product-images;
+      /usr/bin/mc anonymous set download myminio/content-images;
+      echo 'Khởi tạo bucket MinIO hoàn tất!';
+      exit 0;
+      "
+    networks:
+      - phanbon_network
+
+networks:
+  phanbon_network:
+    name: phanbon_network
+    driver: bridge
+
+volumes:
+  mysql_data:
+    name: phanbonshop_mysql_data
+    driver: local
+  redis_data:
+    name: phanbonshop_redis_data
+    driver: local
+  minio_data:
+    name: phanbonshop_minio_data
+    driver: local

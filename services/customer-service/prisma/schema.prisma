@@ -1,0 +1,48 @@
+// Prisma schema cho customer-service
+// Kết nối trực tiếp tới logical database: customer_db (MySQL)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("CUSTOMER_DATABASE_URL")
+}
+
+model CustomerProfile {
+  id        String    @id @default(uuid())
+  userId    String    @unique // Định danh logic liên kết với auth-service
+  fullName  String    @db.VarChar(100)
+  phone     String?   @db.VarChar(20)
+  avatarUrl String?   @db.VarChar(500)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  addresses Address[]
+
+  @@map("customer_profiles")
+}
+
+model Address {
+  id            String          @id @default(uuid())
+  customerId    String
+  recipientName String          @db.VarChar(100)
+  phone         String          @db.VarChar(20)
+  provinceCode  String          @db.VarChar(20)
+  provinceName  String          @db.VarChar(100)
+  districtCode  String          @db.VarChar(20)
+  districtName  String          @db.VarChar(100)
+  wardCode      String          @db.VarChar(20)
+  wardName      String          @db.VarChar(100)
+  addressLine   String          @db.VarChar(255)
+  isDefault     Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  customer      CustomerProfile @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("customer_addresses")
+}

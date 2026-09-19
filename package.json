@@ -1,0 +1,31 @@
+{
+  "name": "fertilizer-commerce",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Nền tảng TMĐT phân bón dành cho thị trường Việt Nam",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:packages": "npm run --workspace=@phanbonshop/shared-types build && npm run --workspace=@phanbonshop/shared-utils build && npm run --workspace=@phanbonshop/logger build && npm run --workspace=@phanbonshop/config build",
+    "pretypecheck": "npm run build:packages",
+    "typecheck": "npm run --workspaces --if-present typecheck",
+    "prebuild": "npm run build:packages",
+    "build": "npm run --workspaces --if-present build",
+    "lint": "npm run --workspaces --if-present lint",
+    "test": "npm run --workspaces --if-present test",
+    "dev": "npm run --workspaces --if-present dev",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.5.4"
+  }
+}
