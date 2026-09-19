@@ -148,9 +148,10 @@ services:
     expose:
       - "3001"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3001
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/auth_db
+      AUTH_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/auth_db
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your_jwt_refresh_secret_key_phanbonshop_32chars_min}
@@ -188,10 +189,13 @@ services:
     expose:
       - "3002"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3002
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/product_db
+      PRODUCT_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/product_db
+      ORDER_SERVICE_URL: http://order:3003
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -230,11 +234,14 @@ services:
     expose:
       - "3003"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3003
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/order_db
+      ORDER_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/order_db
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      PRODUCT_SERVICE_URL: http://product:3002
       INVENTORY_SERVICE_URL: http://inventory:3004
       CUSTOMER_SERVICE_URL: http://customer:3005
       REDIS_HOST: redis
@@ -274,10 +281,12 @@ services:
     expose:
       - "3004"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3004
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/inventory_db
+      INVENTORY_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/inventory_db
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -312,10 +321,13 @@ services:
     expose:
       - "3005"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3005
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/customer_db
+      CUSTOMER_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/customer_db
+      ORDER_SERVICE_URL: http://order:3003
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -350,10 +362,12 @@ services:
     expose:
       - "3006"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3006
       DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/content_db
+      CONTENT_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD:-phanbon_secret}@mysql:3306/content_db
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -362,7 +376,7 @@ services:
       MINIO_PORT: 9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-admin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-admin123456}
-      CORS_ORIGIN: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -395,7 +409,7 @@ services:
     expose:
       - "8080"
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 8080
       AUTH_SERVICE_URL: http://auth:3001
       PRODUCT_SERVICE_URL: http://product:3002
@@ -404,6 +418,7 @@ services:
       CUSTOMER_SERVICE_URL: http://customer:3005
       CONTENT_SERVICE_URL: http://content:3006
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
       REDIS_HOST: redis
       REDIS_PORT: 6379

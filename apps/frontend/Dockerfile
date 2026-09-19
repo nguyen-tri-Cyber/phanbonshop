@@ -22,6 +22,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY packages ./packages
 COPY apps/frontend ./apps/frontend
+RUN mkdir -p /app/apps/frontend/public
 
 # Build internal monorepo packages first
 RUN npm run build:packages

@@ -157,7 +157,7 @@ function LoginContent() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => fillCredentials('farmer1@example.com', 'NongDan@2026!')}
+                onClick={() => fillCredentials('farmer1@example.com', 'MatKhau@123')}
                 className="p-2 text-left border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-primary-50/50 transition-colors"
               >
                 <div className="text-xs font-bold text-gray-800">Tài Khoản Nông Dân</div>

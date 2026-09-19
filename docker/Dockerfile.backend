@@ -7,9 +7,6 @@ FROM node:20-alpine AS builder
 RUN apk add --no-cache libc6-compat openssl
 WORKDIR /app
 
-ARG SERVICE_PATH
-ARG SERVICE_NAME
-
 # Copy root and all workspace package manifests
 COPY package.json package-lock.json ./
 COPY packages ./packages
@@ -25,11 +22,14 @@ COPY services/content-service/package.json ./services/content-service/
 # Clean install dependencies (no host node_modules copied, bypass postinstall until schemas copied)
 RUN npm ci --ignore-scripts
 
-# Copy service source code
-COPY ${SERVICE_PATH} ./${SERVICE_PATH}
-
 # Build internal monorepo packages first
 RUN npm run build:packages
+
+ARG SERVICE_PATH
+ARG SERVICE_NAME
+
+# Copy service source code
+COPY ${SERVICE_PATH} ./${SERVICE_PATH}
 
 # Generate Prisma Client if schema exists
 RUN if [ -f "${SERVICE_PATH}/prisma/schema.prisma" ]; then \
