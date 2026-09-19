@@ -17,6 +17,13 @@ env:
   JWT_SECRET: ci_test_jwt_secret_token_must_have_at_least_32_characters
   INTERNAL_SERVICE_SECRET: ci_test_internal_service_secret_token_secure
   CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+  # Provide DB URLs so `prisma validate` can load all service schemas in non-DB jobs
+  AUTH_DATABASE_URL: mysql://127.0.0.1:3306/auth_db
+  PRODUCT_DATABASE_URL: mysql://127.0.0.1:3306/product_db
+  ORDER_DATABASE_URL: mysql://127.0.0.1:3306/order_db
+  INVENTORY_DATABASE_URL: mysql://127.0.0.1:3306/inventory_db
+  CUSTOMER_DATABASE_URL: mysql://127.0.0.1:3306/customer_db
+  CONTENT_DATABASE_URL: mysql://127.0.0.1:3306/content_db
 
 jobs:
   # ============================================================================
