@@ -225,3 +225,141 @@ export interface Banner {
   updatedAt: string;
 }
 
+export type OrderStatus =
+  | 'PENDING'
+  | 'CONFIRMED'
+  | 'PROCESSING'
+  | 'SHIPPING'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED' | 'REFUNDED';
+
+export type PaymentMethod =
+  | 'COD'
+  | 'BANK_TRANSFER'
+  | 'MOMO'
+  | 'VNPAY'
+  | 'CREDIT_CARD';
+
+export interface OrderItem {
+  id: string;
+  orderId: string;
+  productId: string;
+  variantId: string;
+  productName: string;
+  variantName: string;
+  sku: string;
+  unitPrice: number | string;
+  quantity: number;
+  lineTotal: number | string;
+}
+
+export interface OrderShippingAddress {
+  id?: string;
+  orderId?: string;
+  recipientName: string;
+  phone: string;
+  provinceCode: string;
+  provinceName: string;
+  districtCode: string;
+  districtName: string;
+  wardCode: string;
+  wardName: string;
+  addressLine: string;
+}
+
+export interface Order {
+  id: string;
+  orderNumber: string;
+  customerId: string;
+  status: OrderStatus;
+  paymentStatus: PaymentStatus;
+  paymentMethod: PaymentMethod;
+  subtotal: number | string;
+  discountAmount: number | string;
+  shippingFee: number | string;
+  totalAmount: number | string;
+  couponCode?: string | null;
+  customerNote?: string | null;
+  cancelReason?: string | null;
+  items?: OrderItem[];
+  shippingAddress?: OrderShippingAddress | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CheckoutItemPayload {
+  productId: string;
+  variantId: string;
+  quantity: number;
+}
+
+export interface CheckoutShippingAddressPayload {
+  recipientName: string;
+  phone: string;
+  provinceCode: string;
+  provinceName: string;
+  districtCode: string;
+  districtName: string;
+  wardCode: string;
+  wardName: string;
+  addressLine: string;
+}
+
+export interface CheckoutPayload {
+  items?: CheckoutItemPayload[];
+  addressId?: string;
+  shippingAddress?: CheckoutShippingAddressPayload;
+  couponCode?: string;
+  paymentMethod?: PaymentMethod;
+  customerNote?: string;
+}
+
+export interface CheckoutResult {
+  orderId: string;
+  orderNumber: string;
+  status: OrderStatus;
+  paymentStatus: PaymentStatus;
+  paymentMethod: PaymentMethod;
+  subtotal: number;
+  discountAmount: number;
+  shippingFee: number;
+  totalAmount: number;
+  couponCode?: string | null;
+  items: Array<{
+    id: string;
+    productId: string;
+    variantId: string;
+    productName: string;
+    variantName: string;
+    sku: string;
+    unitPrice: number;
+    quantity: number;
+    lineTotal: number;
+  }>;
+  shippingAddress: CheckoutShippingAddressPayload;
+  payment?: {
+    id: string;
+    provider: string;
+    method: string;
+    amount: number;
+    status: string;
+    transactionReference?: string;
+  };
+}
+
+export interface CouponValidationResult {
+  valid: boolean;
+  couponId?: string;
+  code: string;
+  name: string;
+  discountType: 'PERCENT' | 'FIXED_AMOUNT';
+  discountValue: number;
+  discountAmount: number;
+  maxDiscount?: number | null;
+  minOrderValue?: number | null;
+  message?: string;
+}
+
+

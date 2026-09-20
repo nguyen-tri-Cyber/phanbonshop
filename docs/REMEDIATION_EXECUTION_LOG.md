@@ -239,17 +239,75 @@
 
 ---
 
-#### Task ID: `TASK-PHASE2-04`
-- **Finding:** Thực thi kiểm thử hồi quy toàn diện Monorepo sau Phase 2.
+---
+
+### PHASE 3 — FRONTEND CHECKOUT & INTEGRATION
+
+#### Task ID: `TASK-PHASE3-01`
+- **Finding:** Trang đặt hàng `/checkout` và luồng thanh toán end-to-end trên Frontend hoàn toàn bị khuyết thiếu (3.1).
+- **Files affected:**
+  - `apps/frontend/src/types/index.ts`
+  - `apps/frontend/src/components/customer/cart-drawer.tsx`
+  - `apps/frontend/src/app/(customer)/checkout/page.tsx`
+- **Implementation & Fix:**
+  1. Mở rộng TypeScript contract trong `types/index.ts` với đầy đủ các types: `Order`, `OrderItem`, `OrderStatus`, `PaymentStatus`, `PaymentMethod`, `CheckoutPayload`, `CheckoutResult`, `CouponValidationResult`.
+  2. Nâng cấp `cart-drawer.tsx`: Gắn router navigation cho nút "Tiến hành đặt hàng" để đóng Drawer và chuyển hướng mượt mà sang `/checkout`.
+  3. Xây dựng trang `/checkout` (`checkout/page.tsx`):
+     - Kiểm tra trạng thái đăng nhập: Nếu chưa đăng nhập, hiển thị form Đăng nhập / Đăng ký nhanh tiện lợi ngay tại chỗ (bảo toàn giỏ hàng).
+     - Sổ địa chỉ nhận phân bón: Nạp danh sách địa chỉ từ `GET /customers/me/addresses` hoặc hỗ trợ nhập địa chỉ mới tận ruộng/vườn.
+     - Dữ liệu hành chính 3 cấp Việt Nam: Cascading dropdowns chuẩn (Tỉnh/Thành phố -> Quận/Huyện -> Phường/Xã) sử dụng `@phanbonshop/shared-utils`.
+     - Phương thức thanh toán: Lựa chọn `COD` (Thanh toán tiền mặt khi nhận hàng) hoặc `BANK_TRANSFER` (Chuyển khoản ngân hàng qua mã VietQR).
+     - Thẩm định mã giảm giá (Coupon): Gọi API `POST /coupons/validate` theo thời gian thực, tự động trừ tiền giảm giá vào tổng đơn.
+     - Biểu phí vận chuyển minh bạch: Miễn phí vận chuyển từ 1.000.000đ trở lên, tiêu chuẩn 30.000đ cho đơn nhỏ hơn.
+     - Idempotency Key: Tự động sinh khóa UUIDv4 qua `crypto.randomUUID()` gắn vào header `Idempotency-Key` của request `POST /checkout` để bảo vệ chống đặt hàng trùng lặp.
+     - Xử lý lỗi toàn diện: Hiển thị lỗi trực quan khi hết hàng (`409 Conflict`), mã giảm giá quá hạn, hoặc sự cố mạng.
+     - Tự động gọi `clearCart()` và chuyển hướng sang `/checkout/thanh-cong` khi hoàn tất.
 - **Commands executed & Results:**
-  1. `npm run lint` -> Exit code: **0** (0 errors).
+  - `npm test --workspace=@phanbonshop/frontend` -> **6/6 PASS**.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE3-02`
+- **Finding:** Trang xác nhận đặt hàng thành công `/checkout/thanh-cong` và hướng dẫn thanh toán VietQR (3.2).
+- **Files affected:**
+  - `apps/frontend/src/app/(customer)/checkout/thanh-cong/page.tsx`
+- **Implementation & Fix:**
+  1. Nhận `orderNumber` và `orderId` từ URL search parameters (được bọc trong React `Suspense` boundary).
+  2. Gọi `GET /orders/:idOrNumber` nạp thông tin chi tiết đơn hàng đã xác nhận.
+  3. Hiển thị banner thành công chuyên nghiệp, mã đơn hàng kèm nút Copy tiện lợi.
+  4. Nếu phương thức thanh toán là `BANK_TRANSFER`: Tự động render khung thanh toán VietQR chuyên biệt với thông tin MB Bank, STK `0386 888 999`, chủ tài khoản `CTCP PHAN BON SHOP VN`, số tiền chính xác, nội dung chuyển khoản là mã đơn hàng và hình ảnh dynamic VietQR code.
+  5. Cung cấp nút In đơn hàng (`window.print()`), Xem đơn hàng của tôi (`/tai-khoan?tab=orders`), và Tiếp tục mua sắm (`/san-pham`).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE3-03`
+- **Finding:** Tab "Đơn hàng mùa vụ" trong `/tai-khoan` chưa kết nối API thực tế, hiển thị placeholder giả (3.3).
+- **Files affected:**
+  - `apps/frontend/src/app/(customer)/tai-khoan/page.tsx`
+- **Implementation & Fix:**
+  1. Hỗ trợ query parameter `?tab=orders` tự động chuyển sang tab lịch sử đơn hàng.
+  2. Gọi API `GET /orders` lấy danh sách đơn hàng thực tế của khách hàng từ database.
+  3. Hiển thị từng đơn hàng theo dạng Card trực quan: Mã đơn hàng, ngày đặt, danh sách sản phẩm, số lượng, quy cách, tổng tiền, địa chỉ nhận hàng, và các badge trạng thái (PENDING, CONFIRMED, PROCESSING, SHIPPING, COMPLETED, CANCELLED).
+  4. Bổ sung nút "Hủy Đơn" cho các đơn hàng ở trạng thái `PENDING`: Hỏi lý do hủy và gọi `POST /orders/:id/cancel`, kích hoạt chuỗi bồi hoàn tồn kho tự động.
+  5. Bọc toàn bộ `AccountContent` trong `Suspense` để đảm bảo tuân thủ tiêu chuẩn Next.js App Router SSR.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE3-04`
+- **Finding:** Thực thi kiểm thử hồi quy toàn diện Monorepo sau Phase 3.
+- **Commands executed & Results:**
+  1. `npm run lint` -> Exit code: **0** (0 errors, 0 warnings trên toàn bộ monorepo).
   2. `npm run typecheck` -> Exit code: **0** (0 type errors trên toàn bộ 12 workspaces).
-  3. `npm test` -> Exit code: **0** (17 unit tests PASS).
+  3. `npm test` -> Exit code: **0** (23 unit tests PASS, bao gồm 6 test mới của frontend checkout).
   4. `npm run test:integration --workspace=@phanbonshop/inventory-service` -> Exit code: **0** (6/6 tests PASS).
   5. `npm run test:integration --workspace=@phanbonshop/order-service` -> Exit code: **0** (8/8 tests PASS).
   6. `npm run test:integration --workspace=@phanbonshop/auth-service` -> Exit code: **0** (5/5 tests PASS).
-  7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 27/27 pages).
+  7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
 - **Status:** PASS
+
 
 
 

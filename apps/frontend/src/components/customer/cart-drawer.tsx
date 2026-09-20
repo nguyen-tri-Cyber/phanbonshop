@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
+import { useRouter } from 'next/navigation';
 import { X, Trash2, Plus, Minus, ShoppingBag, ArrowRight } from 'lucide-react';
 import { useCart } from '../../contexts/cart-context';
 import { formatCurrencyVND } from '../../lib/formatters';
 import { Button } from '../ui/button';
 
 export function CartDrawer() {
+  const router = useRouter();
   const {
     items,
     isOpen,
@@ -137,7 +139,13 @@ export function CartDrawer() {
                 </p>
               </div>
               <div className="space-y-2 pt-1">
-                <Button className="w-full justify-center space-x-2 font-semibold shadow-sm">
+                <Button
+                  onClick={() => {
+                    setIsOpen(false);
+                    router.push('/checkout');
+                  }}
+                  className="w-full justify-center space-x-2 font-semibold shadow-sm"
+                >
                   <span>Tiến hành đặt hàng</span>
                   <ArrowRight className="h-4 w-4" />
                 </Button>
