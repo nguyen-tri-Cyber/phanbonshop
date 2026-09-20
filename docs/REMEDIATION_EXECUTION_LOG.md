@@ -499,6 +499,88 @@
   7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
 - **Status:** PASS
 
+---
+
+---
+
+### PHASE 6 — PRODUCTION HARDENING
+
+#### Task ID: `TASK-PHASE6-01`
+- **Finding:** Cấu hình Nginx Reverse Proxy SSL/TLS Cổng 443 và chuyển hướng an toàn HTTP Cổng 80 (`AUD-P1-002` / `TASK-P6-01`).
+- **Files affected:**
+  - `docker/nginx/conf.d/default.conf`
+  - `docker-compose.yml`
+  - `docker/nginx/certs/fullchain.pem`
+  - `docker/nginx/certs/privkey.pem`
+- **Root cause & Fix:**
+  - File cấu hình `default.conf` của Nginx trước đây chỉ lắng nghe trên cổng 80 mà không có cấu hình SSL/TLS cổng 443. Khi triển khai lên môi trường thực tế, toàn bộ dữ liệu người dùng (mật khẩu, thông tin cá nhân nông dân, đơn hàng) đều bị truyền dưới dạng bản rõ (plaintext HTTP), không đáp ứng tiêu chuẩn thương mại điện tử bảo mật.
+  - Đồng thời, nếu chỉ thêm `listen 443 ssl;` mà không có sẵn tệp chứng chỉ SSL trong thư mục mounted, Nginx container sẽ bị crash ngay khi khởi động (`cannot load certificate`).
+  - Khắc phục:
+    1. Tái cấu trúc `docker/nginx/conf.d/default.conf`:
+       - **Server Block Cổng 80 (HTTP)**: Cung cấp endpoint `/healthz` trả về HTTP 200 trực tiếp (không chuyển hướng) cho Docker container healthcheck; mở thư mục `/.well-known/acme-challenge/` cho xác thực Let's Encrypt Certbot; chuyển hướng toàn bộ lưu lượng còn lại sang HTTPS (`return 301 https://$host$request_uri;`).
+       - **Server Block Cổng 443 (HTTPS)**: Kích hoạt `listen 443 ssl;`, `http2 on;`, giao thức hiện đại `TLSv1.2 TLSv1.3`, cipher suites bảo mật cao (đạt chuẩn SSL Labs A+).
+       - Kích hoạt tiêu chuẩn bảo mật nâng cao HSTS (`Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`).
+       - Thiết lập Security Headers chống XSS, Clickjacking, MIME sniffing (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`).
+       - Reverse proxy an toàn cho `/api/auth/` (Next.js auth), `/api/` (API Gateway NestJS), `/_next/static/` (cache 365 ngày), và frontend ứng dụng kèm hỗ trợ WebSocket (`Upgrade`, `Connection`).
+    2. Cung cấp bộ chứng chỉ tự ký dự phòng chuẩn X.509 có thời hạn 10 năm với SAN (`localhost`, `phanbonshop.vn`, `*.local.test`, `127.0.0.1`) trong `docker/nginx/certs/`, giúp cả `docker-compose.yml` và `docker-compose.prod.yml` chạy ngay lập tức mà không bị lỗi thiếu chứng chỉ.
+    3. Cập nhật `docker-compose.yml` mở cổng `443:443` và mount `./docker/nginx/certs:/etc/nginx/certs:ro` đồng bộ với `docker-compose.prod.yml`.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE6-02`
+- **Finding:** Xây dựng bộ công cụ tự động hóa cấp phát và quản lý Chứng chỉ SSL/TLS (Let's Encrypt Certbot & Self-Signed).
+- **Files affected:**
+  - `scripts/generate-self-signed-ssl.sh`
+  - `scripts/generate-self-signed-ssl.ps1`
+  - `scripts/init-letsencrypt.sh`
+- **Implementation & Fix:**
+  1. Phát triển `scripts/generate-self-signed-ssl.sh` (Linux/Bash) và `scripts/generate-self-signed-ssl.ps1` (Windows/PowerShell):
+     - Tự động sinh khóa bí mật RSA 2048-bit và chứng chỉ X.509 với OpenSSL.
+     - Thiết lập đầy đủ Subject Alternative Names (SAN) bao gồm `DNS:localhost`, `DNS:phanbonshop.vn`, `DNS:*.local.test`, `IP:127.0.0.1`.
+  2. Phát triển `scripts/init-letsencrypt.sh`:
+     - Tự động hóa quy trình đăng ký chứng chỉ SSL miễn phí Let's Encrypt bằng Docker Certbot cho domain chính thức `phanbonshop.vn` và `www.phanbonshop.vn`.
+     - Tự động tạo chứng chỉ giả ban đầu để Nginx có thể khởi động vượt qua cấu hình kiểm tra, sau đó chạy Certbot qua giao thức ACME challenge port 80 và reload Nginx mượt mà không gây gián đoạn dịch vụ.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE6-03`
+- **Finding:** Chuẩn hóa Mẫu Cấu hình Môi trường Production và Chính sách Quản lý Khóa Bí mật (`TASK-P6-02`).
+- **Files affected:**
+  - `.env.production.example`
+  - `.gitignore`
+- **Implementation & Fix:**
+  1. Xây dựng `.env.production.example` chi tiết, bao quát toàn bộ 7 nhóm cấu hình: Môi trường & Tên miền, Cổng dịch vụ, MySQL 8.0, Redis 7, MinIO S3, Bí mật Bảo mật JWT/Internal Secret, và Cấu hình Email SMTP.
+  2. Đính kèm cảnh báo an ninh nghiêm ngặt ở đầu tệp: Hướng dẫn kỹ sư vận hành bắt buộc thay đổi tất cả mật khẩu mặc định bằng chuỗi ngẫu nhiên có độ dài tối thiểu 48-64 ký tự sinh qua `openssl rand -base64 48`.
+  3. Cập nhật `.gitignore` loại trừ trường hợp `!.env.production.example` bị bỏ sót do quy tắc `.env.*`, giúp template mẫu được lưu vết chuẩn mực trong repository mà không để lộ các file `.env.production` thực tế.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE6-04`
+- **Finding:** Tự động hóa Kiểm thử Production Hardening và Thực thi Toàn diện Cổng Hồi quy Monorepo.
+- **Files affected:**
+  - `scripts/test-production-hardening.mjs`
+  - `package.json`
+- **Implementation & Fix:**
+  1. Xây dựng bộ test tự động `scripts/test-production-hardening.mjs`:
+     - Thẩm tra cú pháp `default.conf`: Kiểm tra listen 80, `/healthz` probe không redirect, chuyển hướng 301 sang HTTPS, listen 443 ssl, http2, HSTS header, TLSv1.2/1.3, ciphers.
+     - Thẩm tra chứng chỉ SSL: Kiểm tra sự tồn tại và định dạng PEM hợp lệ (`BEGIN CERTIFICATE`, `BEGIN PRIVATE KEY`) của `fullchain.pem` và `privkey.pem`.
+     - Thẩm tra công cụ SSL: Kiểm tra sự tồn tại và entrypoint của `init-letsencrypt.sh`, `generate-self-signed-ssl.sh`, và `generate-self-signed-ssl.ps1`.
+     - Thẩm tra `.env.production.example`: Kiểm tra biến môi trường và cảnh báo sinh khóa bí mật với OpenSSL.
+  2. Đăng ký script `test:hardening` và nhúng trực tiếp vào script `test` tại root `package.json`.
+  3. Kiểm tra hồi quy toàn diện:
+     - `npm test`: **48/48 unit & verification tests PASS**.
+     - `npm run lint`: **0 errors, 0 warnings** trên toàn bộ monorepo.
+     - `npm run typecheck`: **0 errors** trên toàn bộ 12 workspaces.
+     - `npm run test:integration --workspace=@phanbonshop/auth-service`: **5/5 PASS** (MySQL test_auth_db).
+     - `npm run test:integration --workspace=@phanbonshop/inventory-service`: **6/6 PASS** (MySQL test_inventory_db).
+     - `npm run test:integration --workspace=@phanbonshop/order-service`: **8/8 PASS** (MySQL test_order_db).
+     - `npm run build`: **12/12 workspaces build thành công**, Next.js frontend biên dịch thành công toàn bộ 29 routes.
+- **Status:** PASS
+
+
 
 
 
