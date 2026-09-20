@@ -338,32 +338,34 @@ export class CheckoutService {
         }
       }
 
-      const requestHash = computeRequestHash(dto);
-      const claim = await this.claimIdempotencyRecord(customerId, idempotencyKey, requestHash);
+      const executionPromise = (async () => {
+        const requestHash = computeRequestHash(dto);
+        const claim = await this.claimIdempotencyRecord(customerId, idempotencyKey, requestHash);
 
-      if (claim.isCompleted) {
-        logger.info(
-          `Idempotency-Key trùng lặp [${idempotencyKey}]. Trả lại kết quả đơn hàng đã tạo trước đó.`,
-          { customerId },
-        );
-        return claim.response;
-      }
+        if (claim.isCompleted) {
+          logger.info(
+            `Idempotency-Key trùng lặp [${idempotencyKey}]. Trả lại kết quả đơn hàng đã tạo trước đó.`,
+            { customerId },
+          );
+          return claim.response;
+        }
 
-      if (!claim.isOwner || !claim.recordId) {
-        throw new ConflictException({
-          code: 'IDEMPOTENCY_IN_PROGRESS',
-          message: 'Yêu cầu thanh toán đang được xử lý, vui lòng không gửi lặp lại.',
-        });
-      }
+        if (!claim.isOwner || !claim.recordId) {
+          throw new ConflictException({
+            code: 'IDEMPOTENCY_IN_PROGRESS',
+            message: 'Yêu cầu thanh toán đang được xử lý, vui lòng không gửi lặp lại.',
+          });
+        }
 
-      const checkoutPromise = this.executeCheckout(customerId, dto, idempotencyKey, claim.recordId);
+        return this.executeCheckout(customerId, dto, idempotencyKey, claim.recordId);
+      })();
 
       if (!options?.bypassInMemoryLock) {
-        this.inFlightRequests.set(lockKey, checkoutPromise);
+        this.inFlightRequests.set(lockKey, executionPromise);
       }
 
       try {
-        return await checkoutPromise;
+        return await executionPromise;
       } finally {
         if (!options?.bypassInMemoryLock) {
           this.inFlightRequests.delete(lockKey);
