@@ -7,8 +7,11 @@ import { Badge } from '../../../../components/ui/badge';
 
 const API_BASE_URL =
   process.env.INTERNAL_API_URL ||
+  (process.env.INTERNAL_GATEWAY_URL
+    ? `${process.env.INTERNAL_GATEWAY_URL}/api/v1`
+    : null) ||
   process.env.NEXT_PUBLIC_API_URL ||
-  'http://localhost:8080/api/v1';
+  'http://gateway:8080/api/v1';
 
 interface PostDetail {
   id: string;

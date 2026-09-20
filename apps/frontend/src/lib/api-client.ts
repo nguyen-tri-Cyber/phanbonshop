@@ -1,7 +1,20 @@
 import { ApiResponse } from '../types/index';
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1';
+export function getApiBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    return '/api/v1';
+  }
+  return (
+    process.env.INTERNAL_API_URL ||
+    (process.env.INTERNAL_GATEWAY_URL ? `${process.env.INTERNAL_GATEWAY_URL}/api/v1` : null) ||
+    'http://gateway:8080/api/v1'
+  );
+}
+
+const API_BASE_URL = getApiBaseUrl();
 
 // In-memory token storage (chỉ tồn tại trong bộ nhớ runtime của tab)
 let currentAccessToken: string | null = null;
@@ -29,7 +42,8 @@ export async function apiClient<T>(
 
   // Đảm bảo endpoint bắt đầu bằng dấu /
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${API_BASE_URL}${cleanEndpoint}`;
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${cleanEndpoint}`;
 
   const requestHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
