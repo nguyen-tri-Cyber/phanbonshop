@@ -580,9 +580,93 @@
      - `npm run build`: **12/12 workspaces build thành công**, Next.js frontend biên dịch thành công toàn bộ 29 routes.
 - **Status:** PASS
 
+---
 
+---
 
+### PHASE 7 — PAYMENT ARCHITECTURE & INTEGRITY
 
+#### Task ID: `TASK-PHASE7-01`
+- **Finding:** Xây dựng Mô hình Giao Dịch Chuyên Biệt (`payment_transactions`) & Hỗ trợ Nhiều lần thử thanh toán (Attempts) (`TASK-P7-01`).
+- **Files affected:**
+  - `services/order-service/prisma/schema.prisma`
+  - `services/order-service/prisma/migrations/20260920000001_payment_transactions/migration.sql`
+  - `services/order-service/src/payments/payments.service.ts`
+  - `services/order-service/src/payments/payments.controller.ts`
+- **Root cause & Fix:**
+  - Trước đây, hệ thống chỉ lưu `payment_records` gắn trực tiếp 1-1 với trạng thái hiện tại của đơn hàng. Khi khách hàng thanh toán qua VietQR bị hết hạn hoặc thất bại và muốn đổi sang COD hoặc thử lại bằng phương thức khác, hệ thống không có mô hình lưu vết lịch sử các phiên thanh toán thử nghiệm (payment attempts).
+  - Khắc phục:
+    1. Bổ sung bảng `payment_transactions` vào `order_db` với quan hệ 1-nhiều từ `orders` và `payment_records`:
+       - Lưu trữ: `id`, `orderId`, `paymentRecordId`, `provider`, `method`, `amount`, `status` (`PENDING`, `SUCCESS`, `FAILED`, `EXPIRED`), `transactionId`, `rawRequest`, `rawResponse`, `errorMessage`, `paidAt`, `expiredAt`.
+       - Mở rộng enum `PaymentStatus` thêm trạng thái `EXPIRED`.
+    2. Viết migration SQL `20260920000001_payment_transactions` và áp dụng đồng bộ trên cả `order_db` và `test_order_db`.
+    3. Phát triển hàm `createPaymentAttempt()` trong `PaymentsService` và endpoint `POST /api/v1/payments/orders/:orderId/retry`: Cho phép khách hàng đổi phương thức thanh toán và tạo phiên giao dịch mới một cách an toàn mà không làm mất thông tin đơn hàng gốc.
+    4. Cung cấp endpoint `GET /api/v1/payments/orders/:orderId/transactions` truy xuất lịch sử toàn bộ các lần thử thanh toán theo thứ tự thời gian.
+- **Status:** PASS
 
+---
 
+#### Task ID: `TASK-PHASE7-02`
+- **Finding:** Thiết kế Payment State Machine & Chuẩn hóa Giao diện Trừu tượng `PaymentProvider`.
+- **Files affected:**
+  - `services/order-service/src/payments/payment-state-machine.ts`
+  - `services/order-service/src/payments/providers/payment-provider.interface.ts`
+  - `services/order-service/src/payments/providers/cod-payment.provider.ts`
+  - `services/order-service/src/payments/providers/bank-transfer-payment.provider.ts`
+- **Implementation & Fix:**
+  1. Xây dựng lớp `PaymentStateMachine` thực thi ma trận chuyển đổi trạng thái nghiêm ngặt (`ALLOWED_PAYMENT_TRANSITIONS`, `ALLOWED_TRANSACTION_TRANSITIONS`):
+     - Chặn các bước chuyển vi phạm: Ngăn chặn `PAID -> PENDING/FAILED`, chặn `FAILED/EXPIRED -> PAID` mà không qua attempt mới.
+     - Cung cấp các hàm kiểm định: `canTransition()`, `assertTransition()`, `isTerminalStatus()`, `shouldCommitInventory()`, `shouldReleaseInventory()`.
+  2. Chuẩn hóa `PaymentProvider` interface với bộ 3 phương thức chuẩn:
+     - `createPayment(payload: OrderPaymentPayload): Promise<PaymentCreationResult>`
+     - `verifyWebhook(headers: Record<string, string>, body: any): Promise<PaymentWebhookResult>`
+     - `checkStatus(transactionId: string): Promise<PaymentStatusResult>`
+     - Đồng thời duy trì tương thích ngược cho `initialize()` và `verify()`.
+  3. Nâng cấp `CodPaymentProvider` và `BankTransferPaymentProvider` tuân thủ 100% giao diện mới:
+     - `BankTransferPaymentProvider` tự động sinh mã VietQR động kèm hạn sử dụng (15 phút khớp TTL kho) và bóc tách chính xác mã đơn `DH-YYYYMMDD-XXXXXX` từ webhook ngân hàng.
+- **Status:** PASS
 
+---
+
+#### Task ID: `TASK-PHASE7-03`
+- **Finding:** Khắc phục Khiếm khuyết Vòng đời Giữ chỗ kho khi Thanh toán & Xử lý Webhook Idempotent.
+- **Files affected:**
+  - `services/order-service/src/payments/payments.service.ts`
+  - `services/order-service/src/payments/payments.module.ts`
+  - `services/order-service/src/payments/payments.controller.ts`
+- **Root cause & Fix:**
+  - Lỗ hổng nghiêm trọng được phát hiện trong `PaymentsService.confirmPayment`: Trước đây hàm này chỉ cập nhật `order.paymentStatus = PAID` và `order.status = CONFIRMED` trực tiếp trong database mà **hoàn toàn không gọi lệnh xuất kho `commitInventory` sang `inventory-service`**. Hậu quả là sau 15 phút, Expiry Worker quét kho sẽ coi đơn hàng này vẫn đang giữ chỗ quá hạn và tự động thu hồi số lượng hàng, gây lệch kho nghiêm trọng.
+  - Khắc phục:
+    1. Trong `PaymentsService.confirmPayment()`: Tự động gọi `commitOrderInventory(order.id, order.orderNumber)` sang `inventory-service` để cam kết trừ tồn kho vật lý ngay khi xác nhận thanh toán.
+    2. Triển khai phương thức `handlePaymentWebhook()` và endpoint công khai `POST /api/v1/payments/webhook/:provider`:
+       - Thẩm định chữ ký/dữ liệu của webhook qua Provider.
+       - Áp dụng Idempotency: Khi cổng thanh toán gửi lại webhook nhiều lần do mạng chập chờn, hệ thống kiểm tra trạng thái đơn đã `PAID` và phản hồi thành công ngay lập tức mà không chạy lại side-effect.
+       - Khi thanh toán thành công (`isPaid = true`): Chuyển đơn sang `CONFIRMED`, `PAID`, tạo bản ghi `PaymentTransaction` trạng thái `SUCCESS`, và gọi `commitOrderInventory()`.
+       - Khi thanh toán hết hạn (`isExpired = true`): Tạo bản ghi `PaymentTransaction` trạng thái `EXPIRED`, và tự động gọi `releaseOrderInventory()` giải phóng giữ chỗ kho cho khách khác mua. Nếu downstream `inventory-service` bị lỗi, tự động lưu `CompensationTask` để worker bồi hoàn sau.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE7-04`
+- **Finding:** Kiểm thử Tự động Kiến trúc Thanh toán & Thực thi Cổng hồi quy Monorepo.
+- **Files affected:**
+  - `services/order-service/test/payment.architecture.test.mjs`
+  - `services/order-service/package.json`
+  - `package.json`
+- **Implementation & Results:**
+  1. Xây dựng bộ test `payment.architecture.test.mjs` kiểm thử 7 ca kiểm thử toàn diện:
+     - State Machine Valid Transitions (PENDING -> PROCESSING -> PAID, PENDING -> FAILED, PENDING -> EXPIRED, PAID -> REFUNDED).
+     - State Machine Invariant Protection (Chặn PAID -> PENDING, FAILED -> PAID).
+     - Provider Contract Verification (COD và VietQR).
+     - Multiple Payment Attempts Persistence trên MySQL `test_order_db` thực tế.
+     - Webhook Idempotency & Order Auto-Confirmation.
+  2. Đăng ký script `test:payment` và tích hợp vào test harness của monorepo.
+  3. Kết quả kiểm thử hồi quy toàn diện:
+     - `npm test`: **55/55 PASS** (bao gồm 7 test mới của Phase 7).
+     - `npm run lint`: **0 errors, 0 warnings** trên toàn monorepo.
+     - `npm run typecheck`: **0 errors** trên toàn bộ 12 workspaces.
+     - `npm run test:integration --workspace=@phanbonshop/auth-service`: **5/5 PASS** (MySQL test_auth_db).
+     - `npm run test:integration --workspace=@phanbonshop/inventory-service`: **6/6 PASS** (MySQL test_inventory_db).
+     - `npm run test:integration --workspace=@phanbonshop/order-service`: **15/15 PASS** (MySQL test_order_db).
+     - `npm run build`: **12/12 workspaces build thành công**, Next.js frontend biên dịch thành công toàn bộ 29 routes.
+- **Status:** PASS

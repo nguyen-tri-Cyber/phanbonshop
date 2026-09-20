@@ -4,9 +4,10 @@ import { PaymentsService } from './payments.service.js';
 import { CodPaymentProvider } from './providers/cod-payment.provider.js';
 import { BankTransferPaymentProvider } from './providers/bank-transfer-payment.provider.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { CompensationModule } from '../compensation/compensation.module.js';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, CompensationModule],
   controllers: [PaymentsController],
   providers: [
     PaymentsService,

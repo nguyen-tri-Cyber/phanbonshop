@@ -30,6 +30,14 @@ enum PaymentStatus {
   CANCELLED
   REFUNDED
   PARTIALLY_REFUNDED
+  EXPIRED
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
 }
 
 enum PaymentMethod {
@@ -116,6 +124,7 @@ model Order {
   shippingAddress OrderShippingAddress?
   statusHistory  OrderStatusHistory[]
   payments       PaymentRecord[]
+  transactions   PaymentTransaction[]
 
   @@index([customerId])
   @@index([orderNumber])
@@ -247,10 +256,38 @@ model PaymentRecord {
 
   order                Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   auditLogs            PaymentAuditLog[]
+  transactions         PaymentTransaction[]
 
   @@index([orderId])
   @@index([transactionReference])
   @@map("payment_records")
+}
+
+model PaymentTransaction {
+  id              String                   @id @default(uuid())
+  orderId         String
+  paymentRecordId String?
+  provider        String                   @db.VarChar(50)
+  method          PaymentMethod
+  amount          Decimal                  @db.Decimal(12, 2)
+  status          PaymentTransactionStatus @default(PENDING)
+  transactionId   String?                  @db.VarChar(100)
+  idempotencyKey  String?                  @db.VarChar(128)
+  rawRequest      String?                  @db.LongText
+  rawResponse     String?                  @db.LongText
+  errorMessage    String?                  @db.Text
+  paidAt          DateTime?
+  expiredAt       DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  order           Order                    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentRecord   PaymentRecord?           @relation(fields: [paymentRecordId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([transactionId])
+  @@index([status])
+  @@map("payment_transactions")
 }
 
 model PaymentAuditLog {

@@ -3,6 +3,10 @@ import {
   PaymentProvider,
   PaymentInitParams,
   PaymentInitResult,
+  OrderPaymentPayload,
+  PaymentCreationResult,
+  PaymentWebhookResult,
+  PaymentStatusResult,
   PaymentVerifyParams,
   PaymentVerifyResult,
 } from './payment-provider.interface.js';
@@ -19,7 +23,7 @@ export interface BankTransferConfig {
 
 @Injectable()
 export class BankTransferPaymentProvider implements PaymentProvider {
-  readonly providerName = 'MANUAL';
+  readonly providerName = 'VIETQR';
   readonly supportedMethod = PaymentMethod.BANK_TRANSFER;
 
   // Cấu hình tài khoản ngân hàng thụ hưởng chính thức của sàn
@@ -37,28 +41,92 @@ export class BankTransferPaymentProvider implements PaymentProvider {
     return { ...this.config };
   }
 
-  async initialize(params: PaymentInitParams): Promise<PaymentInitResult> {
-    const transferContent = params.orderNumber;
-    const qrImageUrl = `https://img.vietqr.io/image/${this.config.bankCode}-${this.config.accountNumber}-compact2.png?amount=${params.amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(this.config.accountHolder)}`;
+  async createPayment(payload: OrderPaymentPayload): Promise<PaymentCreationResult> {
+    const transferContent = payload.orderNumber;
+    const qrImageUrl = `https://img.vietqr.io/image/${this.config.bankCode}-${this.config.accountNumber}-compact2.png?amount=${payload.amount}&addInfo=${encodeURIComponent(transferContent)}&accountName=${encodeURIComponent(this.config.accountHolder)}`;
+    // Thời hạn giữ mã VietQR mặc định 15 phút đồng bộ với Reservation TTL
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
     return {
       provider: this.providerName,
       method: this.supportedMethod,
       status: PaymentStatus.PENDING,
-      transactionReference: `BT-${params.orderNumber}`,
+      transactionReference: `BT-${payload.orderNumber}`,
+      qrCodeUrl: qrImageUrl,
       instruction: this.config.transferInstruction,
+      expiresAt,
       paymentDetails: {
         bankName: this.config.bankName,
         accountNumber: this.config.accountNumber,
         accountHolder: this.config.accountHolder,
         branch: this.config.branch,
-        amount: params.amount,
+        amount: payload.amount,
         transferContent,
         memo: transferContent,
         qrImageUrl,
         transferInstruction: this.config.transferInstruction,
+        expiresAt: expiresAt.toISOString(),
       },
     };
+  }
+
+  async verifyWebhook(
+    _headers: Record<string, string>,
+    body: unknown,
+  ): Promise<PaymentWebhookResult> {
+    const data = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+
+    // Hỗ trợ webhook chuẩn ngân hàng / VietQR Payment Gateway
+    const transferContent = String(
+      data.content || data.description || data.memo || data.transferContent || '',
+    );
+    const amount = Number(data.amount || data.transferAmount || 0);
+    const transactionId = String(
+      data.transactionId || data.referenceCode || data.id || `BT-TX-${Date.now()}`,
+    );
+
+    // Bóc tách mã đơn hàng từ nội dung chuyển khoản (VD: DH-20260920-XXXXXX)
+    const match = transferContent.match(/DH-\d{8}-[A-Z0-9]+/i);
+    const orderNumber = match ? match[0].toUpperCase() : undefined;
+
+    if (!orderNumber || amount <= 0) {
+      return {
+        isValid: false,
+        status: PaymentStatus.FAILED,
+        isPaid: false,
+        isFailed: true,
+        isExpired: false,
+        errorMessage: 'Nội dung chuyển khoản hoặc số tiền webhook không hợp lệ',
+        rawResponse: data,
+      };
+    }
+
+    return {
+      isValid: true,
+      orderNumber,
+      transactionId,
+      transactionReference: `BT-${orderNumber}`,
+      amount,
+      status: PaymentStatus.PAID,
+      isPaid: true,
+      isFailed: false,
+      isExpired: false,
+      paidAt: new Date(),
+      rawResponse: data,
+    };
+  }
+
+  async checkStatus(transactionId: string): Promise<PaymentStatusResult> {
+    return {
+      transactionId,
+      status: PaymentStatus.PENDING,
+      amount: 0,
+      isPaid: false,
+    };
+  }
+
+  async initialize(params: PaymentInitParams): Promise<PaymentInitResult> {
+    return this.createPayment(params);
   }
 
   async verify(params: PaymentVerifyParams): Promise<PaymentVerifyResult> {

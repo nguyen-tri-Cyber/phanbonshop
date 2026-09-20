@@ -4,6 +4,7 @@ import {
   Post,
   Param,
   Body,
+  Headers,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -11,6 +12,7 @@ import { PaymentsService } from './payments.service.js';
 import { ConfirmPaymentDto } from './dto/payment.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
+import { PaymentMethod } from '../../generated/client/index.js';
 
 @ApiTags('Payments (Thanh Toán)')
 @Controller('api/v1/payments')
@@ -31,6 +33,39 @@ export class PaymentsController {
   @ApiOperation({ summary: 'Lấy thông tin thanh toán của một đơn hàng' })
   async getOrderPayment(@Param('orderId') orderId: string) {
     return this.paymentsService.getPaymentByOrderId(orderId);
+  }
+
+  @Get('orders/:orderId/transactions')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Lấy lịch sử tất cả các lần thử thanh toán của đơn hàng' })
+  async getOrderTransactions(@Param('orderId') orderId: string) {
+    return this.paymentsService.getOrderTransactions(orderId);
+  }
+
+  @Post('orders/:orderId/retry')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Khách hàng tạo phiên thanh toán mới khi lần trước thất bại hoặc đổi phương thức' })
+  async retryPayment(
+    @Param('orderId') orderId: string,
+    @Body('method') method: PaymentMethod,
+    @CurrentUser('userId') customerId: string,
+  ) {
+    return this.paymentsService.createPaymentAttempt(orderId, method, customerId);
+  }
+
+  @Post('webhook/:provider')
+  @ApiOperation({
+    summary: 'Điểm tiếp nhận Webhook / IPN thanh toán từ các cổng (VietQR, MoMo, VNPay)',
+    description: 'Endpoint công khai không qua JWT để các cổng đối tác gọi thông báo trạng thái thanh toán.',
+  })
+  async handleWebhook(
+    @Param('provider') provider: string,
+    @Headers() headers: Record<string, string>,
+    @Body() body: unknown,
+  ) {
+    return this.paymentsService.handlePaymentWebhook(provider, headers, body);
   }
 
   @Get(':id')
