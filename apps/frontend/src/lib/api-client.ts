@@ -14,8 +14,6 @@ export function getApiBaseUrl(): string {
   );
 }
 
-const API_BASE_URL = getApiBaseUrl();
-
 // In-memory token storage (chỉ tồn tại trong bộ nhớ runtime của tab)
 let currentAccessToken: string | null = null;
 
