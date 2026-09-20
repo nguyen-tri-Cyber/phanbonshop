@@ -20,7 +20,12 @@
     "prebuild": "npm run build:packages && npm run prisma:generate",
     "build": "npm run --workspaces --if-present build",
     "lint": "npm run --workspaces --if-present lint",
-    "test": "npm run --workspaces --if-present test",
+    "test": "npm run --workspaces --if-present test && node scripts/test-backup-restore.mjs",
+    "test:backup": "node scripts/test-backup-restore.mjs",
+    "backup": "bash scripts/backup-databases.sh",
+    "backup:win": "powershell -ExecutionPolicy Bypass -File scripts/backup-databases.ps1",
+    "restore:win": "powershell -ExecutionPolicy Bypass -File scripts/restore-databases.ps1",
+    "seed": "npm run --workspaces --if-present seed",
     "dev": "npm run --workspaces --if-present dev",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },

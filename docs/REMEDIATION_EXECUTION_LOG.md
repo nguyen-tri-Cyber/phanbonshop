@@ -406,6 +406,100 @@
   7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
 - **Status:** PASS
 
+---
+
+---
+
+### PHASE 5 — OPERATIONS & RELIABILITY
+
+#### Task ID: `TASK-PHASE5-01`
+- **Finding:** Tách bạch Liveness Probe (`/health`) và Readiness Probe (`/ready`) trên toàn bộ 6 Microservices backend (`AUD-P2-001` / `TASK-P5-01`).
+- **Files affected:**
+  - `services/auth-service/src/health/health.controller.ts`
+  - `services/customer-service/src/health/health.controller.ts`
+  - `services/product-service/src/health/health.controller.ts`
+  - `services/inventory-service/src/health/health.controller.ts`
+  - `services/order-service/src/health/health.controller.ts`
+  - `services/content-service/src/health/health.controller.ts`
+  - `apps/api-gateway/src/health/health.controller.ts`
+  - `services/auth-service/test/auth.unit.test.mjs`
+  - `services/inventory-service/test/inventory.unit.test.mjs`
+  - `services/order-service/test/order.unit.test.mjs`
+- **Root cause & Fix:**
+  - Trước đây, các services chỉ có endpoint `/health` trả về kết quả nông (`{ status: 'ok' }`) mà không có cơ chế thăm dò tính sẵn sàng phụ thuộc (Readiness probe). Nếu liveness probe can thiệp kiểm tra database, sự cố gián đoạn database tạm thời sẽ khiến Docker/K8s liên tục restart container, gây ra vòng lặp restart bão hòa (Cascading Restart Loop).
+  - Khắc phục:
+    1. Chuẩn hóa endpoint `/health` (Liveness): Trả về HTTP 200 `{ status: 'alive', service: '...', timestamp, uptime }` chỉ kiểm tra tiến trình Node.js và Event Loop còn hoạt động. Tuyệt đối không query database.
+    2. Xây dựng endpoint `/ready` (Readiness): Inject `PrismaService`, thực thi câu lệnh SQL nhẹ `SELECT 1` kiểm tra kết nối cơ sở dữ liệu.
+       - Khi database hoạt động bình thường: Trả về HTTP 200 `{ status: 'ready', service: '...', timestamp, checks: { database: 'up' } }`.
+       - Khi database mất kết nối hoặc quá tải: Ném `ServiceUnavailableException` trả về HTTP 503 `{ status: 'not_ready', service: '...', checks: { database: 'down' } }`, giúp load balancer/reverse proxy tạm ngắt điều phối traffic đến container mà không giết tiến trình container.
+    3. Thêm các unit test kiểm thử chuyên biệt trong `auth-service`, `inventory-service`, và `order-service` chứng minh: `/health` không chạm database, `/ready` thành công khi DB khỏe và ném HTTP 503 khi DB down.
+- **Commands executed & Results:**
+  - `npm test` -> **44/44 PASS**.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE5-02`
+- **Finding:** Xây dựng bộ công cụ tự động Sao lưu & Khôi phục dữ liệu cho 6 Microservices Databases (`AUD-P1-002` / `TASK-P5-02`).
+- **Files affected:**
+  - `scripts/backup-databases.sh`
+  - `scripts/restore-databases.sh`
+  - `scripts/backup-databases.ps1`
+  - `scripts/restore-databases.ps1`
+  - `scripts/test-backup-restore.mjs`
+  - `package.json`
+- **Implementation & Fix:**
+  1. Phát triển script sao lưu `scripts/backup-databases.sh` và `scripts/backup-databases.ps1`:
+     - Tự động xuất dữ liệu của cả 6 logical databases (`auth_db`, `product_db`, `order_db`, `inventory_db`, `customer_db`, `content_db`).
+     - Hỗ trợ cả kết nối mysqldump trực tiếp lẫn `docker exec phanbonshop_mysql`.
+     - Sử dụng các cờ an toàn dữ liệu: `--single-transaction --quick --routines --triggers`.
+     - Tự động nén tệp sao lưu dạng `.sql.gz` và xuất tệp `metadata.json` chứa timestamp, thống kê số lượng bảng và trạng thái thành công.
+  2. Phát triển script khôi phục `scripts/restore-databases.sh` và `scripts/restore-databases.ps1`:
+     - Nhận đường dẫn thư mục backup, tự động giải nén và nạp lại vào MySQL cho diễn tập khôi phục thảm họa (Disaster Recovery Drill).
+  3. Xây dựng bộ test tự động `scripts/test-backup-restore.mjs` kiểm tra cú pháp, sự tồn tại và schema metadata.
+  4. Đăng ký các lệnh tiện ích trong root `package.json`: `npm run backup`, `npm run backup:win`, `npm run restore:win`, `npm run test:backup`.
+- **Commands executed & Results:**
+  - `node scripts/test-backup-restore.mjs` -> **3/3 PASS** (3ms).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE5-03`
+- **Finding:** Hoàn thiện Seed Script cho `content-service` và chuẩn hóa cơ chế nạp dữ liệu phát triển (`AUD-P2-007`).
+- **Files affected:**
+  - `services/content-service/prisma/seed.ts`
+  - `services/content-service/package.json`
+  - `services/auth-service/prisma/seed.ts`
+  - `services/auth-service/package.json`
+  - `services/product-service/package.json`
+  - `package.json`
+- **Implementation & Fix:**
+  1. Xây dựng `services/content-service/prisma/seed.ts` với đầy đủ dữ liệu mẫu nông nghiệp thực tế:
+     - 3 banners quảng cáo tiếp thị (Hero banner ưu đãi đầu vụ, NPK chính hãng, sidebar cẩm nang).
+     - 3 bài viết kiến thức nông nghiệp chuyên sâu (Kỹ thuật bón phân NPK lúa Đông Xuân, Hướng dẫn phục hồi sầu riêng bằng hữu cơ vi sinh, Nguyên tắc 4 đúng trong sử dụng phân bón).
+     - Bọc bảo vệ an toàn: Ngăn chặn tuyệt đối thực thi trên môi trường production (`process.env.NODE_ENV === 'production'`).
+  2. Khắc phục lỗi `Unique constraint failed on users_phone_key` trong `services/auth-service/prisma/seed.ts`: Kiểm tra cả `email` lẫn `phone` khi tìm tài khoản đã tồn tại, đảm bảo seed an toàn idempotent 100%.
+  3. Cấu hình lệnh `npm run seed` sử dụng `node --experimental-strip-types` trực tiếp không cần phụ thuộc binary ngoài.
+  4. Đăng ký lệnh `npm run seed` ở root `package.json` điều phối nạp dữ liệu một chạm cho toàn bộ monorepo.
+- **Commands executed & Results:**
+  - `npm run seed` -> **Hoàn tất nạp dữ liệu thành công cho auth_db, content_db, và product_db**.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE5-04`
+- **Finding:** Thực thi kiểm thử hồi quy toàn diện Monorepo sau Phase 5.
+- **Commands executed & Results:**
+  1. `npm run lint` -> Exit code: **0** (0 errors, 0 warnings trên toàn bộ monorepo).
+  2. `npm run typecheck` -> Exit code: **0** (0 type errors trên toàn bộ 12 workspaces).
+  3. `npm test` -> Exit code: **0** (Toàn bộ 44 unit tests PASS).
+  4. `npm run test:integration --workspace=@phanbonshop/auth-service` -> Exit code: **0** (5/5 tests PASS).
+  5. `npm run test:integration --workspace=@phanbonshop/inventory-service` -> Exit code: **0** (6/6 tests PASS).
+  6. `npm run test:integration --workspace=@phanbonshop/order-service` -> Exit code: **0** (8/8 tests PASS).
+  7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
+- **Status:** PASS
+
+
 
 
 

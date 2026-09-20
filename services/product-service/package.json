@@ -19,7 +19,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:db:push": "prisma db push",
     "prisma:validate": "prisma validate",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "seed": "node --experimental-strip-types prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",

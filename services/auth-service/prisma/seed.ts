@@ -8,7 +8,15 @@
 import { PrismaClient, Role, UserStatus } from '../generated/client/index.js';
 import bcrypt from 'bcryptjs';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  datasources: {
+    db: {
+      url:
+        process.env.AUTH_DATABASE_URL ||
+        'mysql://phanbon_user:phanbon_secret@localhost:3307/auth_db',
+    },
+  },
+});
 
 async function main(): Promise<void> {
   // BẢO VỆ AN TOÀN TUYỆT ĐỐI CHO PRODUCTION: Từ chối chạy seed trên production!
@@ -52,15 +60,23 @@ async function main(): Promise<void> {
   ];
 
   for (const u of usersToSeed) {
-    const existing = await prisma.user.findUnique({
-      where: { email: u.email },
+    const existing = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: u.email },
+          { phone: u.phone },
+        ],
+      },
     });
 
     if (existing) {
       await prisma.user.update({
-        where: { email: u.email },
+        where: { id: existing.id },
         data: {
+          email: u.email,
+          phone: u.phone,
           passwordHash,
+          fullName: u.fullName,
           role: u.role,
           status: UserStatus.ACTIVE,
         },
