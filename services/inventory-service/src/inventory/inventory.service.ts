@@ -3,6 +3,8 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -11,6 +13,7 @@ import {
   CommitInventoryDto,
   AdjustInventoryDto,
   InitInventoryDto,
+  RollbackInventoryDto,
 } from './dto/inventory.dto.js';
 import {
   ReservationStatus,
@@ -43,8 +46,40 @@ interface RawInventoryRow {
 }
 
 @Injectable()
-export class InventoryService {
+export class InventoryService implements OnModuleInit, OnModuleDestroy {
+  private cleanupTimer: NodeJS.Timeout | null = null;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  async onModuleInit() {
+    // 1. Quét dọn ngay các reservation hết hạn lúc khởi động
+    try {
+      await this.releaseExpiredReservations();
+    } catch (err) {
+      logger.error('Lỗi khi quét reservation hết hạn lúc khởi động:', err);
+    }
+
+    // 2. Kích hoạt worker chạy định kỳ (mặc định 60 giây)
+    const intervalMs = Number(process.env.RESERVATION_CLEANUP_INTERVAL_MS) || 60_000;
+    this.cleanupTimer = setInterval(async () => {
+      try {
+        await this.releaseExpiredReservations();
+      } catch (err) {
+        logger.error('Lỗi khi worker quét dọn reservation hết hạn định kỳ:', err);
+      }
+    }, intervalMs);
+
+    if (this.cleanupTimer && typeof this.cleanupTimer.unref === 'function') {
+      this.cleanupTimer.unref();
+    }
+  }
+
+  onModuleDestroy() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+  }
 
   // --- 1. TẠM GIỮ TỒN KHO (RESERVE) - CHỐNG OVERSELL VỚI SELECT ... FOR UPDATE ---
   async reserve(
@@ -209,6 +244,10 @@ export class InventoryService {
       }
 
       if (reservation.status === ReservationStatus.COMMITTED) {
+        if (dto.allowRollback !== false) {
+          // Tự động chuyển sang hoàn tồn kho (Rollback / Restock) khi đơn đã xuất kho
+          return this.executeRollbackCommitted(tx, reservation, dto.reason, requestId);
+        }
         throw new BadRequestException(
           `Không thể giải phóng lượt tạm giữ đã hoàn tất xuất kho (COMMITTED)`,
         );
@@ -267,6 +306,189 @@ export class InventoryService {
         },
       };
     });
+  }
+
+  // --- 2.1 HOÀN TỒN KHO KHI HỦY ĐƠN (ROLLBACK / RESTOCK) - HỖ TRỢ CẢ ACTIVE LẪN COMMITTED ---
+  async rollbackOrRelease(
+    dto: RollbackInventoryDto,
+    requestId?: string,
+  ): Promise<{
+    success: boolean;
+    message: string;
+    reservation: InventoryReservation;
+    inventory: {
+      stockQuantity: number;
+      reservedQuantity: number;
+      availableQuantity: number;
+    };
+  }> {
+    return this.prisma.$transaction(async (tx) => {
+      const reservation = await tx.inventoryReservation.findUnique({
+        where: { reservationId: dto.reservationId },
+      });
+
+      if (!reservation) {
+        throw new NotFoundException(
+          `Không tìm thấy lượt tạm giữ với mã: ${dto.reservationId}`,
+        );
+      }
+
+      // 1. Idempotent: Nếu đã RELEASED trước đó
+      if (reservation.status === ReservationStatus.RELEASED) {
+        logger.info(`[Idempotent] Reservation ${dto.reservationId} đã RELEASED trước đó`);
+        const inv = await tx.inventory.findUnique({
+          where: { variantId: reservation.variantId },
+        });
+        return {
+          success: true,
+          message: 'Lượt tạm giữ đã được giải phóng trước đó (Idempotent)',
+          reservation,
+          inventory: {
+            stockQuantity: inv?.stockQuantity || 0,
+            reservedQuantity: inv?.reservedQuantity || 0,
+            availableQuantity: (inv?.stockQuantity || 0) - (inv?.reservedQuantity || 0),
+          },
+        };
+      }
+
+      // 2. Idempotent: Nếu đã EXPIRED trước đó
+      if (reservation.status === ReservationStatus.EXPIRED) {
+        logger.info(`[Idempotent] Reservation ${dto.reservationId} đã EXPIRED trước đó`);
+        const inv = await tx.inventory.findUnique({
+          where: { variantId: reservation.variantId },
+        });
+        return {
+          success: true,
+          message: 'Lượt tạm giữ đã hết hạn và được giải phóng trước đó (Idempotent)',
+          reservation,
+          inventory: {
+            stockQuantity: inv?.stockQuantity || 0,
+            reservedQuantity: inv?.reservedQuantity || 0,
+            availableQuantity: (inv?.stockQuantity || 0) - (inv?.reservedQuantity || 0),
+          },
+        };
+      }
+
+      // 3. Đã COMMITTED -> Hoàn trả tồn kho vật lý (Restock)
+      if (reservation.status === ReservationStatus.COMMITTED) {
+        return this.executeRollbackCommitted(tx, reservation, dto.reason, requestId);
+      }
+
+      // 4. Đang ACTIVE -> Giải phóng tạm giữ (giảm reservedQuantity)
+      const rows = await tx.$queryRaw<RawInventoryRow[]>`
+        SELECT id, productId, variantId, stockQuantity, reservedQuantity, reorderLevel
+        FROM inventory
+        WHERE variantId = ${reservation.variantId}
+        FOR UPDATE
+      `;
+
+      const inv = rows[0];
+      if (!inv) {
+        throw new NotFoundException(`Không tìm thấy tồn kho cho variant: ${reservation.variantId}`);
+      }
+
+      const newReserved = Math.max(0, inv.reservedQuantity - reservation.quantity);
+
+      await tx.inventory.update({
+        where: { variantId: reservation.variantId },
+        data: { reservedQuantity: newReserved },
+      });
+
+      const updatedReservation = await tx.inventoryReservation.update({
+        where: { id: reservation.id },
+        data: { status: ReservationStatus.RELEASED },
+      });
+
+      await tx.inventoryMovement.create({
+        data: {
+          productId: inv.productId,
+          variantId: reservation.variantId,
+          type: MovementType.RELEASE_RESERVATION,
+          quantity: reservation.quantity,
+          stockBefore: inv.stockQuantity,
+          stockAfter: inv.stockQuantity,
+          reservedBefore: inv.reservedQuantity,
+          reservedAfter: newReserved,
+          reason: dto.reason || `Hủy đơn hàng và giải phóng tạm giữ cho reservation ${dto.reservationId}`,
+          referenceType: reservation.referenceType,
+          referenceId: reservation.referenceId,
+          requestId: requestId || null,
+        },
+      });
+
+      return {
+        success: true,
+        message: 'Giải phóng tồn kho tạm giữ thành công',
+        reservation: updatedReservation,
+        inventory: {
+          stockQuantity: inv.stockQuantity,
+          reservedQuantity: newReserved,
+          availableQuantity: inv.stockQuantity - newReserved,
+        },
+      };
+    });
+  }
+
+  /**
+   * Helper xử lý hoàn tồn kho vật lý (Restock) cho reservation đã COMMITTED
+   */
+  private async executeRollbackCommitted(
+    tx: Prisma.TransactionClient,
+    reservation: InventoryReservation,
+    reason?: string,
+    requestId?: string,
+  ) {
+    const rows = await tx.$queryRaw<RawInventoryRow[]>`
+      SELECT id, productId, variantId, stockQuantity, reservedQuantity, reorderLevel
+      FROM inventory
+      WHERE variantId = ${reservation.variantId}
+      FOR UPDATE
+    `;
+
+    const inv = rows[0];
+    if (!inv) {
+      throw new NotFoundException(`Không tìm thấy tồn kho cho variant: ${reservation.variantId}`);
+    }
+
+    const newStock = inv.stockQuantity + reservation.quantity;
+
+    await tx.inventory.update({
+      where: { variantId: reservation.variantId },
+      data: { stockQuantity: newStock },
+    });
+
+    const updatedReservation = await tx.inventoryReservation.update({
+      where: { id: reservation.id },
+      data: { status: ReservationStatus.RELEASED },
+    });
+
+    await tx.inventoryMovement.create({
+      data: {
+        productId: inv.productId,
+        variantId: reservation.variantId,
+        type: MovementType.CANCELLED_ORDER,
+        quantity: reservation.quantity,
+        stockBefore: inv.stockQuantity,
+        stockAfter: newStock,
+        reservedBefore: inv.reservedQuantity,
+        reservedAfter: inv.reservedQuantity,
+        reason: reason || `Hủy đơn hàng và hoàn tồn kho thực tế cho reservation ${reservation.reservationId}`,
+        referenceType: reservation.referenceType,
+        referenceId: reservation.referenceId,
+        requestId: requestId || null,
+      },
+    });
+
+    return {
+      success: true,
+      message: 'Hoàn trả số lượng vào tồn kho thực tế thành công (Restocked)',
+      reservation: updatedReservation,
+      inventory: {
+        stockQuantity: newStock,
+        reservedQuantity: inv.reservedQuantity,
+        availableQuantity: newStock - inv.reservedQuantity,
+      },
+    };
   }
 
   // --- 3. XUẤT KHO HOÀN TẤT ĐƠN HÀNG (COMMIT) - IDEMPOTENT ---
@@ -546,19 +768,38 @@ export class InventoryService {
     });
   }
 
-  // --- 6. GIẢI PHÓNG CÁC RESERVATION HẾT HẠN (EXPIRED RESERVATION CLEANUP) ---
+  // --- 6. GIẢI PHÓNG CÁC RESERVATION HẾT HẠN (EXPIRED RESERVATION CLEANUP) - MULTI-REPLICA SAFE ---
   async releaseExpiredReservations(): Promise<{ releasedCount: number }> {
     const expiredReservations = await this.prisma.inventoryReservation.findMany({
       where: {
         status: ReservationStatus.ACTIVE,
         expiresAt: { lte: new Date() },
       },
+      take: 50,
+      orderBy: { expiresAt: 'asc' },
     });
 
     let count = 0;
     for (const res of expiredReservations) {
       try {
         await this.prisma.$transaction(async (tx) => {
+          // 1. Atomic Claim: Chỉ worker nào cập nhật thành công ACTIVE -> EXPIRED mới được xử lý tiếp
+          const claim = await tx.inventoryReservation.updateMany({
+            where: {
+              id: res.id,
+              status: ReservationStatus.ACTIVE,
+            },
+            data: {
+              status: ReservationStatus.EXPIRED,
+            },
+          });
+
+          if (claim.count === 0) {
+            // Worker replica khác hoặc tiến trình khác đã claim/xử lý reservation này
+            return;
+          }
+
+          // 2. Khóa dòng inventory tương ứng
           const rows = await tx.$queryRaw<RawInventoryRow[]>`
             SELECT id, productId, variantId, stockQuantity, reservedQuantity, reorderLevel
             FROM inventory
@@ -573,11 +814,6 @@ export class InventoryService {
             await tx.inventory.update({
               where: { variantId: res.variantId },
               data: { reservedQuantity: newReserved },
-            });
-
-            await tx.inventoryReservation.update({
-              where: { id: res.id },
-              data: { status: ReservationStatus.EXPIRED },
             });
 
             await tx.inventoryMovement.create({
@@ -605,7 +841,9 @@ export class InventoryService {
       }
     }
 
-    logger.info(`Đã giải phóng ${count} lượt tạm giữ tồn kho hết hạn`);
+    if (count > 0) {
+      logger.info(`Đã giải phóng ${count} lượt tạm giữ tồn kho hết hạn`);
+    }
     return { releasedCount: count };
   }
 

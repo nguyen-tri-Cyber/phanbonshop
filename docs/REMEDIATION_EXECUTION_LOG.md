@@ -172,4 +172,84 @@
   4. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 27/27 pages).
 - **Status:** PASS
 
+---
+
+### PHASE 2 — CORE DATA INTEGRITY & RACE CONDITIONS
+
+#### Task ID: `TASK-PHASE2-01`
+- **Finding:** Khắc phục thiếu hụt Expiry Worker và bảo đảm an toàn đa bản sao (Multi-Replica Safe) cho việc thu hồi các lượt tạm giữ quá hạn (`expiresAt <= NOW()`) trong `inventory-service` (2.4).
+- **Files affected:**
+  - `services/inventory-service/src/inventory/inventory.service.ts`
+  - `services/inventory-service/test/inventory.lifecycle-expiry.integration.test.mjs`
+  - `services/inventory-service/package.json`
+- **Root cause & Fix:**
+  - `inventory-service` trước đây chỉ có endpoint `POST /internal/v1/inventory/cleanup-expired` nhưng không có background timer/worker tự động quét định kỳ.
+  - Trong logic quét cũ của `releaseExpiredReservations`, câu lệnh query lấy danh sách rồi lặp qua từng bản ghi nhưng không kiểm tra trạng thái nguyên tử `ACTIVE`, dẫn đến nếu 2 worker replicas cùng chạy song song thì cả 2 đều thực thi lệnh trừ `reservedQuantity`, gây lỗi trừ âm kho (negative reserved).
+  - Khắc phục:
+    1. Triển khai lifecycle hooks `OnModuleInit` và `OnModuleDestroy` trong `InventoryService`, tự động kích hoạt timer nền chạy định kỳ mỗi 60 giây (tùy chỉnh qua `RESERVATION_CLEANUP_INTERVAL_MS`).
+    2. Tái thiết kế `releaseExpiredReservations` với cơ chế Atomic Claiming: `updateMany({ where: { id: res.id, status: ReservationStatus.ACTIVE }, data: { status: ReservationStatus.EXPIRED } })`. Chỉ worker replica nào claim thành công `count === 1` mới được quyền khóa dòng tồn kho và trừ `reservedQuantity`.
+- **Implementation & Scenarios tested:**
+  - `2.4.1`: Tạo reservation với `expiresAt` quá hạn 2 phút trước -> Kích hoạt Expiry Worker -> Chuyển trạng thái sang `EXPIRED`, `reservedQuantity` giảm về 0, `availableQuantity` phục hồi về 10, ghi nhận `MovementType.RELEASE_RESERVATION`.
+  - `2.4.2`: Chạy đồng thời 3 worker replicas song song trên 2 bản ghi hết hạn -> Đảm bảo đúng 2 bản ghi được giải phóng, không có hiện tượng double-decrement.
+- **Commands executed & Results:**
+  - `npm run test:integration --workspace=@phanbonshop/inventory-service` -> **6/6 PASS** (580ms).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE2-02`
+- **Finding:** Chuẩn hóa Mô hình Vòng đời Tồn kho — Đơn hàng (Reserve-on-Checkout / Commit-on-Confirm / Restock-on-Cancel) và khắc phục lỗi không thể hoàn tồn kho khi hủy đơn đã xác nhận (2.5).
+- **Files affected:**
+  - `docs/INVENTORY_LIFECYCLE.md`
+  - `services/inventory-service/src/inventory/dto/inventory.dto.ts`
+  - `services/inventory-service/src/inventory/inventory.service.ts`
+  - `services/inventory-service/src/inventory/inventory.controller.ts`
+  - `services/order-service/src/orders/orders.service.ts`
+  - `services/order-service/package.json`
+  - `services/order-service/test/order.lifecycle-stock.integration.test.mjs`
+- **Root cause & Fix:**
+  - Trước đây, `OrdersService` chỉ gọi `commitInventory` khi đơn chuyển sang `COMPLETED`. Điều này dẫn đến lỗ hổng: đơn hàng ở trạng thái `CONFIRMED` hoặc `PROCESSING` kéo dài quá thời hạn 15 phút của reservation sẽ bị Expiry Worker dọn dẹp nhầm, khiến đơn hàng mất giữ chỗ.
+  - Ngược lại, khi đơn hàng đã qua bước xuất kho bị hủy (`CANCELLED`), `inventory-service` ném lỗi `400 BadRequestException: Không thể giải phóng lượt tạm giữ đã hoàn tất xuất kho (COMMITTED)`, khiến số lượng hàng không được hoàn trả lại kho vật lý.
+  - Khắc phục:
+    1. Soạn thảo tài liệu chuẩn hóa kiến trúc [`docs/INVENTORY_LIFECYCLE.md`](file:///d:/tool/phanbonshop/docs/INVENTORY_LIFECYCLE.md).
+    2. Bổ sung endpoint `POST /internal/v1/inventory/rollback` và hàm `rollbackOrRelease()` trong `inventory-service`:
+       - Nếu reservation là `COMMITTED`: Tự động cộng lại `stockQuantity = stockQuantity + quantity`, ghi movement `MovementType.CANCELLED_ORDER`, chuyển reservation sang `RELEASED`.
+       - Nếu reservation là `ACTIVE`: Giảm `reservedQuantity`, ghi movement `MovementType.RELEASE_RESERVATION`.
+       - Nếu reservation đã `RELEASED` hoặc `EXPIRED`: Trả về thành công an toàn idempotent.
+    3. Cập nhật `OrdersService.updateStatus`:
+       - Khi chuyển sang `CONFIRMED`: Lập tức gọi `commitInventory()` để cam kết trừ `stockQuantity` và `reservedQuantity`.
+       - Khi chuyển sang `CANCELLED`: Gọi `releaseInventoryCompensation()`, tự động hoàn kho vật lý hoặc giải phóng tạm giữ tương ứng.
+- **Commands executed & Results:**
+  - `node --test test/order.lifecycle-stock.integration.test.mjs` -> **3/3 PASS** (587ms).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE2-03`
+- **Finding:** Tích hợp Outbox Bồi hoàn Bền vững (`CompensationTask`) khi hủy đơn hàng gặp sự cố downstream (2.3).
+- **Files affected:**
+  - `services/order-service/src/orders/orders.service.ts`
+- **Implementation & Fix:**
+  - Inject `CompensationService` vào `OrdersService`.
+  - Trong hàm `releaseInventoryCompensation()`, nếu lệnh gọi HTTP sang `inventory-service` thất bại (HTTP 503 hoặc Timeout), hệ thống không nuốt lỗi mà lập tức ghi một nhiệm vụ `CompensationTask` vào database với trạng thái `PENDING` và type `RELEASE_INVENTORY`.
+  - Worker nền của `CompensationService` sẽ tự động quét và bồi hoàn lại khi `inventory-service` phục hồi.
+- **Commands executed & Results:**
+  - Test `2.5.3` trong `order.lifecycle-stock.integration.test.mjs` -> **PASS** (104ms).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE2-04`
+- **Finding:** Thực thi kiểm thử hồi quy toàn diện Monorepo sau Phase 2.
+- **Commands executed & Results:**
+  1. `npm run lint` -> Exit code: **0** (0 errors).
+  2. `npm run typecheck` -> Exit code: **0** (0 type errors trên toàn bộ 12 workspaces).
+  3. `npm test` -> Exit code: **0** (17 unit tests PASS).
+  4. `npm run test:integration --workspace=@phanbonshop/inventory-service` -> Exit code: **0** (6/6 tests PASS).
+  5. `npm run test:integration --workspace=@phanbonshop/order-service` -> Exit code: **0** (8/8 tests PASS).
+  6. `npm run test:integration --workspace=@phanbonshop/auth-service` -> Exit code: **0** (5/5 tests PASS).
+  7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 27/27 pages).
+- **Status:** PASS
+
+
 

@@ -22,6 +22,7 @@ import {
   CommitInventoryDto,
   AdjustInventoryDto,
   InitInventoryDto,
+  RollbackInventoryDto,
 } from './dto/inventory.dto.js';
 import { InternalSecretGuard } from '../auth/guards/internal-secret.guard.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
@@ -81,6 +82,19 @@ export class InventoryController {
     @Headers('x-request-id') requestId?: string,
   ) {
     return this.inventoryService.commit(dto, requestId);
+  }
+
+  @Post('internal/v1/inventory/rollback')
+  @UseGuards(InternalSecretGuard)
+  @ApiHeader({ name: 'X-Internal-Secret', required: true })
+  @ApiOperation({
+    summary: '[Internal] Hoàn trả tồn kho khi hủy đơn (hỗ trợ cả ACTIVE lẫn COMMITTED)',
+  })
+  async rollback(
+    @Body() dto: RollbackInventoryDto,
+    @Headers('x-request-id') requestId?: string,
+  ) {
+    return this.inventoryService.rollbackOrRelease(dto, requestId);
   }
 
   @Post('internal/v1/inventory/cleanup-expired')

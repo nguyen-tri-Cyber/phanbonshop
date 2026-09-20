@@ -3,9 +3,16 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { OrderStatus, PaymentStatus, Prisma } from '../../generated/client/index.js';
+import {
+  OrderStatus,
+  PaymentStatus,
+  Prisma,
+  CompensationTaskType,
+} from '../../generated/client/index.js';
+import { CompensationService } from '../compensation/compensation.service.js';
 import { createLogger } from '@phanbonshop/logger';
 import { getEnvString, getServiceUrl, CANONICAL_PORTS } from '@phanbonshop/config';
 import crypto from 'node:crypto';
@@ -34,7 +41,10 @@ export class OrdersService {
   );
   private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly compensationService?: CompensationService,
+  ) {}
 
   /**
    * Sinh mã đơn hàng theo định dạng: DH-YYYYMMDD-XXXXXX
@@ -149,7 +159,18 @@ export class OrdersService {
       }
     }
 
-    // Nếu chuyển sang COMPLETED: Commit xuất kho vật lý cho từng variant
+    // Nếu chuyển sang CONFIRMED: Commit xuất kho vật lý (chuyển từ reserved sang trừ stockQuantity)
+    if (toStatus === OrderStatus.CONFIRMED && order.reservationId) {
+      for (const item of order.items) {
+        const itemReservationId = `${order.reservationId}-${item.variantId}`;
+        await this.commitInventory(
+          itemReservationId,
+          order.orderNumber,
+        );
+      }
+    }
+
+    // Nếu chuyển sang COMPLETED: Đảm bảo commit nếu trước đó chưa commit
     if (toStatus === OrderStatus.COMPLETED && order.reservationId) {
       for (const item of order.items) {
         const itemReservationId = `${order.reservationId}-${item.variantId}`;
@@ -513,6 +534,7 @@ export class OrdersService {
     reservationId: string,
     reason: string,
   ): Promise<void> {
+    let success = false;
     try {
       logger.info(`Kích hoạt bù trừ giải phóng kho cho reservationId: ${reservationId}`);
       const res = await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/release`, {
@@ -524,6 +546,7 @@ export class OrdersService {
         body: JSON.stringify({
           reservationId,
           reason,
+          allowRollback: true,
         }),
       });
 
@@ -532,9 +555,25 @@ export class OrdersService {
         logger.error(`Lỗi bồi hoàn giải phóng kho: ${res.status} - ${text}`);
       } else {
         logger.info(`Đã bồi hoàn giải phóng kho thành công cho reservationId: ${reservationId}`);
+        success = true;
       }
     } catch (err) {
       logger.error('Không thể kết nối inventory-service để bồi hoàn:', err);
+    }
+
+    if (!success && this.compensationService) {
+      try {
+        await this.compensationService.createTask(
+          CompensationTaskType.RELEASE_INVENTORY,
+          {
+            reservationId,
+            reason,
+            requestId: `cancel-${crypto.randomUUID().slice(0, 8)}`,
+          },
+        );
+      } catch (taskErr) {
+        logger.error('Không thể tạo CompensationTask khi bồi hoàn thất bại:', taskErr);
+      }
     }
   }
 

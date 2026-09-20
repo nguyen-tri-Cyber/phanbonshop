@@ -55,6 +55,22 @@ export class ReleaseInventoryDto {
   @IsOptional()
   @IsString()
   reason?: string;
+
+  @ApiPropertyOptional({ description: 'Tự động hoàn tồn kho nếu reservation đã COMMITTED', default: true })
+  @IsOptional()
+  allowRollback?: boolean;
+}
+
+export class RollbackInventoryDto {
+  @ApiProperty({ description: 'Mã lượt tạm giữ cần hoàn tồn kho (dành cho đơn đã COMMITTED hoặc ACTIVE)', example: 'order-123-variant-456' })
+  @IsString()
+  @IsNotEmpty()
+  reservationId!: string;
+
+  @ApiPropertyOptional({ description: 'Lý do hủy đơn / hoàn tồn kho', example: 'Khách hàng hủy đơn hàng đã xác nhận' })
+  @IsOptional()
+  @IsString()
+  reason?: string;
 }
 
 export class CommitInventoryDto {
