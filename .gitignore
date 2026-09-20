@@ -12,6 +12,7 @@ __pycache__/
 dist/
 build/
 .next/
+.next*/
 out/
 **/generated/client/
 
@@ -24,6 +25,7 @@ yarn-error.log*
 # Turborepo & Cache
 .turbo/
 .cache/
+*.tsbuildinfo
 coverage/
 
 # IDE / OS / Tooling

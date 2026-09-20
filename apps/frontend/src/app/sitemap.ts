@@ -23,6 +23,28 @@ interface SitemapPost {
   updatedAt?: string;
 }
 
+async function safeFetchJson<T>(url: string, timeoutMs = 1500): Promise<T | null> {
+  // Chỉ fetch nếu là URL HTTP(S) tuyệt đối hợp lệ
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return null;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
@@ -52,16 +74,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   let postEntries: MetadataRoute.Sitemap = [];
 
   try {
-    const [prodRes, catRes, postRes] = await Promise.all([
-      fetch(`${API_BASE_URL}/products?limit=100`, { cache: 'no-store' }),
-      fetch(`${API_BASE_URL}/categories`, { cache: 'no-store' }),
-      fetch(`${API_BASE_URL}/posts?limit=100`, { cache: 'no-store' }),
+    const [prodJson, catJson, postJson] = await Promise.all([
+      safeFetchJson<{ data?: { items?: SitemapProduct[] } }>(`${API_BASE_URL}/products?limit=100`),
+      safeFetchJson<{ data?: SitemapCategory[] }>(`${API_BASE_URL}/categories`),
+      safeFetchJson<{ data?: { items?: SitemapPost[] } }>(`${API_BASE_URL}/posts?limit=100`),
     ]);
 
-    if (prodRes.ok) {
-      const prodJson = await prodRes.json();
-      const items: SitemapProduct[] = prodJson.data?.items || [];
-      productEntries = items.map((p) => ({
+    if (prodJson?.data?.items) {
+      productEntries = prodJson.data.items.map((p) => ({
         url: `${baseUrl}/san-pham/${p.slug}`,
         lastModified: p.updatedAt ? new Date(p.updatedAt) : new Date(),
         changeFrequency: 'weekly' as const,
@@ -69,10 +89,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       }));
     }
 
-    if (catRes.ok) {
-      const catJson = await catRes.json();
-      const items: SitemapCategory[] = catJson.data || [];
-      categoryEntries = items
+    if (catJson?.data) {
+      categoryEntries = catJson.data
         .filter((c) => c.status === 'ACTIVE')
         .map((c) => ({
           url: `${baseUrl}/danh-muc/${c.slug}`,
@@ -82,10 +100,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         }));
     }
 
-    if (postRes.ok) {
-      const postJson = await postRes.json();
-      const items: SitemapPost[] = postJson.data?.items || [];
-      postEntries = items.map((p) => ({
+    if (postJson?.data?.items) {
+      postEntries = postJson.data.items.map((p) => ({
         url: `${baseUrl}/kien-thuc/${p.slug}`,
         lastModified: p.updatedAt ? new Date(p.updatedAt) : new Date(),
         changeFrequency: 'weekly' as const,
@@ -93,7 +109,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       }));
     }
   } catch {
-    // If upstream services fail, return static routes safely
+    // Graceful fallback nếu upstream services không khả dụng
   }
 
   return [...staticEntries, ...productEntries, ...categoryEntries, ...postEntries];

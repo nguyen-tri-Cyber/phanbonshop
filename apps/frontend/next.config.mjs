@@ -10,6 +10,7 @@ const nextConfig = {
   experimental: {
     outputFileTracingRoot: path.join(__dirname, '../../'),
   },
+  cleanDistDir: false,
   reactStrictMode: true,
   images: {
     remotePatterns: [
