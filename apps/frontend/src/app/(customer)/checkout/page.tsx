@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Lock,
   RotateCcw,
+  Smartphone,
 } from 'lucide-react';
 import { useAuth } from '../../../contexts/auth-context';
 import { useCart } from '../../../contexts/cart-context';
@@ -319,8 +320,20 @@ export default function CheckoutPage() {
       });
 
       if (res.success && res.data) {
-        // Clear cart and redirect to order success page
+        // Clear cart
         await clearCart();
+
+        // Nếu là thanh toán qua MoMo và có payUrl, chuyển hướng khách hàng sang cổng thanh toán MoMo
+        const momoPayUrl =
+          res.data.payUrl ||
+          (res.data.paymentDetails as Record<string, unknown> | null)?.payUrl;
+
+        if (paymentMethod === 'MOMO' && typeof momoPayUrl === 'string' && momoPayUrl) {
+          window.location.href = momoPayUrl;
+          return;
+        }
+
+        // Chuyển hướng tới trang thông báo đặt hàng thành công
         router.push(
           `/checkout/thanh-cong?orderId=${res.data.orderId}&orderNumber=${res.data.orderNumber}`,
         );
@@ -870,6 +883,37 @@ export default function CheckoutPage() {
                   </div>
                   <p className="text-[11px] text-gray-500 mt-1">
                     Quét mã QR chuẩn VietQR qua ứng dụng bất kỳ ngân hàng nào. Hệ thống tự động khớp mã đơn và cập nhật trạng thái đơn hàng.
+                  </p>
+                </div>
+              </label>
+
+              {/* Option 3: MOMO WALLET */}
+              <label
+                className={`flex items-start space-x-3 p-3.5 rounded-xl border cursor-pointer transition-all ${
+                  paymentMethod === 'MOMO'
+                    ? 'border-pink-600 bg-pink-50/20 ring-1 ring-pink-500'
+                    : 'border-gray-200 hover:border-gray-300 bg-white'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="paymentMethodRadio"
+                  checked={paymentMethod === 'MOMO'}
+                  onChange={() => setPaymentMethod('MOMO')}
+                  className="mt-1 h-4 w-4 text-pink-600 focus:ring-pink-500 border-gray-300"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <Smartphone className="h-4 w-4 text-pink-600" />
+                    <span className="text-xs font-bold text-gray-900">
+                      Ví điện tử MoMo (Sandbox / QR MoMo)
+                    </span>
+                    <Badge variant="default" className="text-[10px] bg-pink-600">
+                      Nhanh chóng & Tiện lợi
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Thanh toán an toàn qua Ví MoMo bằng cách quét mã QR hoặc chuyển hướng sang cổng thanh toán trực tuyến MoMo.
                   </p>
                 </div>
               </label>

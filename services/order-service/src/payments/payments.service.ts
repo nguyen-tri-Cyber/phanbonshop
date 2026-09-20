@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CodPaymentProvider } from './providers/cod-payment.provider.js';
 import { BankTransferPaymentProvider } from './providers/bank-transfer-payment.provider.js';
+import { MomoPaymentProvider } from './providers/momo-payment.provider.js';
 import {
   PaymentProvider,
   PaymentInitParams,
@@ -36,6 +37,7 @@ export interface CreatedPaymentResult {
   paymentDetails?: Record<string, unknown>;
   instruction?: string;
   qrCodeUrl?: string;
+  payUrl?: string;
 }
 
 const ALLOWED_CONFIRM_ROLES = new Set(['ADMIN', 'MANAGER', 'STAFF', 'SUPER_ADMIN']);
@@ -51,6 +53,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly codProvider: CodPaymentProvider,
     private readonly bankTransferProvider: BankTransferPaymentProvider,
+    private readonly momoProvider: MomoPaymentProvider,
     private readonly compensationService: CompensationService,
   ) {}
 
@@ -62,10 +65,19 @@ export class PaymentsService {
   }
 
   /**
+   * Lấy cấu hình cổng MoMo Sandbox
+   */
+  getMomoSettings() {
+    return this.momoProvider.getConfig();
+  }
+
+  /**
    * Tìm Provider tương ứng với PaymentMethod
    */
   getProvider(method: PaymentMethod): PaymentProvider {
     switch (method) {
+      case PaymentMethod.MOMO:
+        return this.momoProvider;
       case PaymentMethod.BANK_TRANSFER:
         return this.bankTransferProvider;
       case PaymentMethod.COD:
@@ -128,6 +140,7 @@ export class PaymentsService {
       paymentDetails: initResult.paymentDetails,
       instruction: initResult.instruction,
       qrCodeUrl: initResult.qrCodeUrl,
+      payUrl: initResult.payUrl,
     };
   }
 
@@ -238,6 +251,7 @@ export class PaymentsService {
         paymentDetails: initResult.paymentDetails,
         instruction: initResult.instruction,
         qrCodeUrl: initResult.qrCodeUrl,
+        payUrl: initResult.payUrl,
       };
     });
   }
@@ -455,6 +469,8 @@ export class PaymentsService {
       provider = this.bankTransferProvider;
     } else if (normalizedProvider.includes('COD')) {
       provider = this.codProvider;
+    } else if (normalizedProvider.includes('MOMO')) {
+      provider = this.momoProvider;
     } else {
       throw new BadRequestException(`Cổng thanh toán "${providerName}" chưa được hỗ trợ`);
     }

@@ -712,6 +712,14 @@ export class CheckoutService {
             : null,
           paymentDetails: paymentResult?.paymentDetails || null,
           paymentInstruction: paymentResult?.instruction || null,
+          payUrl:
+            paymentResult?.payUrl ||
+            (paymentResult?.paymentDetails as Record<string, unknown>)?.payUrl ||
+            null,
+          qrCodeUrl:
+            paymentResult?.qrCodeUrl ||
+            (paymentResult?.paymentDetails as Record<string, unknown>)?.qrCodeUrl ||
+            null,
           createdAt: order.createdAt.toISOString(),
         };
 

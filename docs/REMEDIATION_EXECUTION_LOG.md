@@ -670,3 +670,99 @@
      - `npm run test:integration --workspace=@phanbonshop/order-service`: **15/15 PASS** (MySQL test_order_db).
      - `npm run build`: **12/12 workspaces build thành công**, Next.js frontend biên dịch thành công toàn bộ 29 routes.
 - **Status:** PASS
+
+---
+
+### PHASE 8 — MOMO SANDBOX INTEGRATION
+
+#### Task ID: `TASK-PHASE8-01`
+- **Finding:** Triển khai Cổng thanh toán MoMo Sandbox (`MomoPaymentProvider`) tuân thủ nghiêm ngặt chuẩn chữ ký số HMAC-SHA256 và kiến trúc Provider của Phase 7.
+- **Files affected:**
+  - `services/order-service/src/payments/providers/momo-payment.provider.ts`
+- **Implementation & Architecture:**
+  1. Xây dựng lớp `MomoPaymentProvider` kế thừa giao diện trừu tượng `PaymentProvider`:
+     - Quản lý cấu hình linh hoạt qua biến môi trường (`MOMO_PARTNER_CODE`, `MOMO_ACCESS_KEY`, `MOMO_SECRET_KEY`, `MOMO_API_ENDPOINT`, `MOMO_QUERY_ENDPOINT`, `MOMO_REDIRECT_URL`, `MOMO_IPN_URL`, `MOMO_PARTNER_NAME`, `MOMO_STORE_ID`).
+     - Hỗ trợ giá trị kiểm thử tiêu chuẩn MoMo Sandbox mặc định.
+  2. Triển khai phương thức `createPayment(payload)`:
+     - Tạo chuỗi ký HMAC-SHA256 theo quy chuẩn MoMo: `accessKey=$accessKey&amount=$amount&extraData=$extraData&ipnUrl=$ipnUrl&orderId=$orderId&orderInfo=$orderInfo&partnerCode=$partnerCode&redirectUrl=$redirectUrl&requestId=$requestId&requestType=$requestType`.
+     - Thực hiện gọi API MoMo với `AbortController` (timeout 3500ms).
+     - Cơ chế **Deterministic Sandbox Fallback**: Khi máy chủ hoạt động trong môi trường local/CI không có kết nối ra internet, tự động kích hoạt chế độ sandbox fallback sinh mã QR và URL chuyển hướng an toàn, đảm bảo kiểm thử và phát triển nội bộ không bị treo hoặc phát sinh lỗi mạng.
+  3. Triển khai phương thức `verifyWebhook(headers, body)`:
+     - Tái lập chuỗi ký IPN theo quy chuẩn MoMo: `accessKey=$accessKey&amount=$amount&extraData=$extraData&message=$message&orderId=$orderId&orderInfo=$orderInfo&orderType=$orderType&partnerCode=$partnerCode&payType=$payType&requestId=$requestId&responseTime=$responseTime&resultCode=$resultCode&transId=$transId`.
+     - So sánh chữ ký bằng thuật toán an toàn hằng số thời gian `crypto.timingSafeEqual` nhằm ngăn chặn tấn công Timing Attack.
+     - Phân loại kết quả giao dịch:
+       - `resultCode === 0`: Giao dịch thành công (`isPaid: true`, `status: PaymentStatus.PAID`).
+       - `resultCode === 1006` hoặc `1007`: Hết hạn / Người dùng hủy (`isExpired: true`, `status: PaymentStatus.EXPIRED`).
+       - Các mã lỗi khác: Giao dịch thất bại (`isFailed: true`, `status: PaymentStatus.FAILED`).
+  4. Triển khai phương thức `checkStatus(transactionId)` phục vụ tra cứu chủ động từ MoMo Query API.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE8-02`
+- **Finding:** Tích hợp `MomoPaymentProvider` vào dịch vụ trung tâm `PaymentsService` và điều phối Webhook.
+- **Files affected:**
+  - `services/order-service/src/payments/payments.module.ts`
+  - `services/order-service/src/payments/payments.service.ts`
+  - `services/order-service/src/payments/payments.controller.ts`
+  - `services/order-service/src/checkout/checkout.service.ts`
+- **Implementation & Fix:**
+  1. Khai báo `MomoPaymentProvider` trong `providers` và `exports` của `PaymentsModule`.
+  2. Trong `PaymentsService`:
+     - Inject `momoProvider: MomoPaymentProvider`.
+     - Điều hướng `PaymentMethod.MOMO` trong hàm `getProvider()` trả về `momoProvider`.
+     - Cập nhật hàm `handlePaymentWebhook()` nhận diện từ khóa `MOMO` từ nhà cung cấp.
+     - Bổ sung trường `payUrl` vào `CreatedPaymentResult`, hỗ trợ khách hàng truy cập ngay URL thanh toán khi khởi tạo đơn hoặc tạo lần thử mới (`createPaymentAttempt`).
+     - Cung cấp hàm `getMomoSettings()` truy xuất cấu hình công khai của MoMo.
+  3. Trong `PaymentsController`:
+     - Cung cấp endpoint `GET /api/v1/payments/settings/momo`: Xem cấu hình cổng MoMo.
+     - Cung cấp endpoint `POST /api/v1/payments/momo/ipn`: Tiếp nhận trực tiếp IPN Webhook từ cổng MoMo, chuyển giao cho quy trình xác thực và đồng bộ đơn hàng.
+  4. Trong `CheckoutService`:
+     - Trả về trực tiếp `payUrl` và `qrCodeUrl` trong response đặt hàng (`POST /api/v1/checkout`), cho phép client chuyển hướng thanh toán mượt mà.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE8-03`
+- **Finding:** Tích hợp tùy chọn thanh toán Ví MoMo trên Giao diện Frontend Checkout và Trang hoàn tất đơn hàng.
+- **Files affected:**
+  - `apps/frontend/src/types/index.ts`
+  - `apps/frontend/src/app/(customer)/checkout/page.tsx`
+  - `apps/frontend/src/app/(customer)/checkout/thanh-cong/page.tsx`
+- **Implementation & UI/UX:**
+  1. Mở rộng kiểu dữ liệu `CheckoutResult` trong `types/index.ts` bổ sung `payUrl?: string | null;` và `qrCodeUrl?: string | null;`.
+  2. Cập nhật trang Checkout (`/checkout`):
+     - Thêm tùy chọn radio button thứ 3: **Ví điện tử MoMo (Sandbox / QR MoMo)** với biểu tượng điện thoại thông minh và badge màu hồng đặc trưng của MoMo.
+     - Trong quy trình gửi đơn (`handleCheckoutSubmit`): Sau khi giỏ hàng được dọn sạch, nếu khách hàng chọn phương thức `MOMO` và phản hồi có chứa `payUrl`, hệ thống tự động chuyển hướng khách hàng (`window.location.href = momoPayUrl`) sang cổng thanh toán trực tuyến MoMo.
+  3. Cập nhật trang thông báo hoàn tất đặt hàng (`/checkout/thanh-cong`):
+     - Hiển thị nhãn phương thức: `order.paymentMethod === 'MOMO' ? 'Ví điện tử MoMo' : ...`
+     - Khi đơn hàng thanh toán qua MoMo chưa hoàn tất (`paymentStatus !== 'PAID'`), tự động hiển thị hộp thông tin hướng dẫn thanh toán MoMo Sandbox trực quan với mã đơn hàng và số tiền cần thanh toán.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE8-04`
+- **Finding:** Xây dựng Bộ kiểm thử Tự động `momo.sandbox.test.mjs` và Vượt qua 5 Cổng Kiểm Soát Chất Lượng Monorepo.
+- **Files affected:**
+  - `services/order-service/test/momo.sandbox.test.mjs`
+  - `services/order-service/package.json`
+  - `package.json`
+- **Implementation & Results:**
+  1. Xây dựng bộ test toàn diện `momo.sandbox.test.mjs` với 8 ca kiểm thử:
+     - `8.1`: Xác thực chữ ký số HMAC-SHA256 theo chuẩn MoMo (đúng 64 ký tự hex) và kiểm tra tính bất biến chống giả mạo (Tamper Proof).
+     - `8.2`: Unit test `createPayment` sinh URL MoMo và mã QR; unit test `verifyWebhook` xử lý thành công (`resultCode: 0` -> `PAID`), xử lý hủy/hết hạn (`resultCode: 1006` -> `EXPIRED`), và từ chối chữ ký giả mạo (Signature Mismatch).
+     - `8.3`: Tích hợp End-to-End Webhook trên MySQL `test_order_db`: Tiếp nhận IPN MoMo hợp lệ -> Đơn tự động chuyển `CONFIRMED`, `PAID`, tạo bản ghi `PaymentTransaction` trạng thái `SUCCESS`.
+     - `8.3 (Idempotency)`: Kiểm tra gửi lặp lại cùng một Webhook IPN MoMo không gây duplicate side-effects.
+  2. Đăng ký script `test:momo` trong `order-service` và tích hợp vào chuỗi test root của monorepo.
+  3. Kết quả 5 Cổng Kiểm Soát Chất Lượng (Quality Gates):
+     - **Gate 1 (Unit & Tooling Tests):** `npm test` -> **63/63 PASS** (bao gồm 8 test MoMo mới và 7 test Payment Phase 7).
+     - **Gate 2 (Linter):** `npm run lint` -> **0 errors, 0 warnings** trên toàn bộ packages/services/apps.
+     - **Gate 3 (Typecheck):** `npm run typecheck` -> **0 errors** trên toàn bộ 12 workspaces.
+     - **Gate 4 (Integration Tests):**
+       - `auth-service` critical flow: **5/5 PASS**
+       - `inventory-service` concurrency & lifecycle: **6/6 PASS**
+       - `order-service` saga, idempotency, lifecycle, payment architecture & momo: **23/23 PASS**
+       - Tổng cộng kiểm thử tích hợp: **34/34 PASS** trên các database MySQL phân tán.
+     - **Gate 5 (Production Build):** `npm run build` -> **12/12 workspaces build thành công 100%**, Next.js frontend biên dịch hoàn chỉnh 29 routes tĩnh và động.
+- **Status:** PASS
+

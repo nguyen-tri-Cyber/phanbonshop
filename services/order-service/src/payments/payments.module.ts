@@ -3,6 +3,7 @@ import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
 import { CodPaymentProvider } from './providers/cod-payment.provider.js';
 import { BankTransferPaymentProvider } from './providers/bank-transfer-payment.provider.js';
+import { MomoPaymentProvider } from './providers/momo-payment.provider.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { CompensationModule } from '../compensation/compensation.module.js';
 
@@ -13,7 +14,13 @@ import { CompensationModule } from '../compensation/compensation.module.js';
     PaymentsService,
     CodPaymentProvider,
     BankTransferPaymentProvider,
+    MomoPaymentProvider,
   ],
-  exports: [PaymentsService, CodPaymentProvider, BankTransferPaymentProvider],
+  exports: [
+    PaymentsService,
+    CodPaymentProvider,
+    BankTransferPaymentProvider,
+    MomoPaymentProvider,
+  ],
 })
 export class PaymentsModule {}

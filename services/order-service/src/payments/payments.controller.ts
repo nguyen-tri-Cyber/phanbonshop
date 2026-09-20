@@ -27,6 +27,14 @@ export class PaymentsController {
     return this.paymentsService.getBankTransferSettings();
   }
 
+  @Get('settings/momo')
+  @ApiOperation({
+    summary: 'Lấy thông tin cấu hình cổng thanh toán MoMo Sandbox',
+  })
+  async getMomoSettings() {
+    return this.paymentsService.getMomoSettings();
+  }
+
   @Get('orders/:orderId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -66,6 +74,18 @@ export class PaymentsController {
     @Body() body: unknown,
   ) {
     return this.paymentsService.handlePaymentWebhook(provider, headers, body);
+  }
+
+  @Post('momo/ipn')
+  @ApiOperation({
+    summary: 'Điểm tiếp nhận IPN Webhook chính thức từ MoMo Payment Gateway',
+    description: 'Endpoint công khai tiếp nhận thông báo kết quả giao dịch tức thời từ MoMo.',
+  })
+  async handleMomoIpn(
+    @Headers() headers: Record<string, string>,
+    @Body() body: unknown,
+  ) {
+    return this.paymentsService.handlePaymentWebhook('MOMO', headers, body);
   }
 
   @Get(':id')

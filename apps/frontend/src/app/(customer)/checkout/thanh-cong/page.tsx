@@ -15,6 +15,7 @@ import {
   Calendar,
   Truck,
   Building,
+  Smartphone,
 } from 'lucide-react';
 import { Button } from '../../../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../../../components/ui/card';
@@ -87,6 +88,7 @@ function OrderSuccessContent() {
   const effectiveOrderNumber = order?.orderNumber || orderNumberParam || 'Đang cập nhật';
   const totalAmountNum = order ? Number(order.totalAmount) : 0;
   const isBankTransfer = order?.paymentMethod === 'BANK_TRANSFER';
+  const isMomo = order?.paymentMethod === 'MOMO';
 
   // VietQR Dynamic URL (MB Bank standard)
   const vietQrUrl = `https://img.vietqr.io/image/mbbank-0386888999-compact2.png?amount=${totalAmountNum}&addInfo=${effectiveOrderNumber}&accountName=CONG%20TY%20CO%20PHAN%20PHAN%20BON%20SHOP%20VIET%20NAM`;
@@ -196,6 +198,42 @@ function OrderSuccessContent() {
         </Card>
       )}
 
+      {/* 2.2 MOMO PAYMENT BOX (If paymentMethod is MOMO) */}
+      {isMomo && order?.paymentStatus !== 'PAID' && (
+        <Card className="border-2 border-pink-600 bg-pink-50/10 shadow-md overflow-hidden">
+          <CardHeader className="bg-pink-700 text-white py-3 px-5">
+            <CardTitle className="text-sm sm:text-base flex items-center space-x-2">
+              <Smartphone className="h-5 w-5 text-pink-200" />
+              <span>Thanh Toán Trực Tuyến Qua Ví MoMo Sandbox</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div className="space-y-2 text-xs">
+                <p className="text-sm font-bold text-gray-900">
+                  Đơn hàng đang chờ hoàn tất thanh toán trên Ví MoMo.
+                </p>
+                <p className="text-gray-600">
+                  Số tiền cần thanh toán:{' '}
+                  <span className="font-black text-pink-700 text-sm">
+                    {formatCurrencyVND(totalAmountNum)}
+                  </span>
+                </p>
+                <p className="text-[11px] text-gray-500">
+                  Mã tham chiếu đơn hàng:{' '}
+                  <span className="font-mono font-bold text-gray-800">
+                    {effectiveOrderNumber}
+                  </span>
+                </p>
+                <p className="text-[11px] text-amber-800 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                  Sau khi giao dịch thành công trên MoMo, hệ thống máy chủ sẽ tiếp nhận thông báo IPN tự động và lập tức xác nhận đơn hàng của quý khách.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 3. Order Details Summary */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Recipient & Shipping Info */}
@@ -253,6 +291,8 @@ function OrderSuccessContent() {
               <span className="font-bold text-gray-900">
                 {order?.paymentMethod === 'BANK_TRANSFER'
                   ? 'Chuyển khoản VietQR'
+                  : order?.paymentMethod === 'MOMO'
+                  ? 'Ví điện tử MoMo'
                   : 'Tiền mặt khi nhận hàng (COD)'}
               </span>
             </div>

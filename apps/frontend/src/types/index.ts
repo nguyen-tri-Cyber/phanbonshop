@@ -347,6 +347,9 @@ export interface CheckoutResult {
     status: string;
     transactionReference?: string;
   };
+  paymentDetails?: Record<string, unknown> | null;
+  payUrl?: string | null;
+  qrCodeUrl?: string | null;
 }
 
 export interface CouponValidationResult {
