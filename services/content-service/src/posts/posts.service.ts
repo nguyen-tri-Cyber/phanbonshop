@@ -7,10 +7,14 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma, PostStatus } from '../../generated/client/index.js';
 import { CreatePostDto, UpdatePostDto } from './dto/post.dto.js';
 import { toVietnameseSlug } from '@phanbonshop/shared-utils';
+import { MinioService } from '../minio/minio.service.js';
 
 @Injectable()
 export class PostsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly minioService: MinioService,
+  ) {}
 
   /**
    * [Admin] Tạo bài viết blog mới
@@ -197,7 +201,16 @@ export class PostsService {
     }
     if (dto.excerpt !== undefined) data.excerpt = dto.excerpt?.trim() || null;
     if (dto.content !== undefined) data.content = dto.content;
-    if (dto.coverImageUrl !== undefined) data.coverImageUrl = dto.coverImageUrl?.trim() || null;
+    if (dto.coverImageUrl !== undefined) {
+      const cleanUrl = dto.coverImageUrl?.trim() || null;
+      if (cleanUrl !== existing.coverImageUrl && existing.coverImageUrl) {
+        const oldKey = this.minioService.extractObjectKey(existing.coverImageUrl);
+        if (oldKey) {
+          await this.minioService.deleteFile(oldKey);
+        }
+      }
+      data.coverImageUrl = cleanUrl;
+    }
     if (dto.status !== undefined) {
       data.status = dto.status;
       if (dto.status === PostStatus.PUBLISHED && !existing.publishedAt && !dto.publishedAt) {
@@ -223,6 +236,13 @@ export class PostsService {
     const existing = await this.prisma.post.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy bài viết ID: ${id}`);
+    }
+
+    if (existing.coverImageUrl) {
+      const objectKey = this.minioService.extractObjectKey(existing.coverImageUrl);
+      if (objectKey) {
+        await this.minioService.deleteFile(objectKey);
+      }
     }
 
     await this.prisma.post.delete({ where: { id } });

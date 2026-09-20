@@ -219,10 +219,20 @@ describe('Phase 1.6 — Auth Critical Flows Integration Tests (Real MySQL test_a
       },
       (err) => {
         assert.ok(err instanceof UnauthorizedException);
-        assert.match(err.message, /Refresh token đã bị thu hồi/);
+        assert.match(err.message, /Phát hiện token đã bị thu hồi/);
         return true;
       },
       'Expected UnauthorizedException when reusing revoked refresh token',
+    );
+
+    // 5. Verify Token Family Batch Revocation (RFC 6819):
+    // Toàn bộ các phiên đăng nhập còn lại (bao gồm newSession) phải bị thu hồi ngay lập tức
+    const familySessionAfterReuse = await prisma.refreshTokenSession.findUnique({
+      where: { tokenHash: newHash },
+    });
+    assert.ok(
+      familySessionAfterReuse.revokedAt !== null,
+      'Toàn bộ token trong cùng family phải bị thu hồi khi phát hiện token reuse',
     );
   });
 

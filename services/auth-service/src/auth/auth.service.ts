@@ -17,6 +17,9 @@ import { ForgotPasswordDto, ResetPasswordDto } from './dto/reset-password.dto.js
 import { Role, UserStatus, User } from '../../generated/client/index.js';
 import { getEnvString } from '@phanbonshop/config';
 import { EmailService } from '../email/email.service.js';
+import { createLogger } from '@phanbonshop/logger';
+
+const logger = createLogger('auth-service:auth');
 
 export interface TokenResult {
   accessToken: string;
@@ -228,9 +231,20 @@ export class AuthService {
       throw new UnauthorizedException('Session không tồn tại hoặc token không hợp lệ');
     }
 
-    // Kiểm tra token đã bị thu hồi chưa (Token reuse detection)
+    // Kiểm tra token đã bị thu hồi chưa (Token reuse detection -> Batch Revoke Token Family)
     if (session.revokedAt !== null) {
-      throw new UnauthorizedException('Refresh token đã bị thu hồi và không thể tái sử dụng');
+      logger.warn(
+        `Phát hiện tái sử dụng Refresh Token đã thu hồi (Token Reuse)! Thu hồi toàn bộ Token Family của user ${session.userId}.`,
+        { userId: session.userId, sessionId: session.id, ipAddress },
+      );
+
+      // Batch revoke toàn bộ refresh tokens còn lại của user (RFC 6819 Token Family Invalidation)
+      await this.prisma.refreshTokenSession.updateMany({
+        where: { userId: session.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      throw new UnauthorizedException('Phát hiện token đã bị thu hồi. Toàn bộ phiên đăng nhập đã bị hủy vì lý do bảo mật.');
     }
 
     if (session.expiresAt < new Date()) {

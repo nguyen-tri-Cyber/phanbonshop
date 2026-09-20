@@ -308,6 +308,105 @@
   7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
 - **Status:** PASS
 
+---
+
+---
+
+### PHASE 4 — SECURITY & DATA INTEGRITY
+
+#### Task ID: `TASK-PHASE4-01`
+- **Finding:** Khắc phục lỗ hổng Token Reuse không thu hồi toàn bộ Token Family trong `auth-service` (`AUD-P2-003`).
+- **Files affected:**
+  - `services/auth-service/src/auth/auth.service.ts`
+  - `services/auth-service/test/auth.critical-flow.integration.test.mjs`
+- **Root cause & Fix:**
+  - Theo khuyến nghị bảo mật OAuth 2.0 / RFC 6819, khi phát hiện một Refresh Token đã bị thu hồi (`revokedAt !== null`) được gửi lên để xin cấp mới token, đây là dấu hiệu rõ ràng của hành vi đánh cắp token hoặc replay attack.
+  - Trước đây, `AuthService.refresh()` chỉ ném lỗi `UnauthorizedException` cho chính session đó mà không vô hiệu hóa các session hợp lệ khác đang hoạt động của cùng người dùng, khiến kẻ tấn công hoặc phiên đăng nhập bị xâm nhập vẫn tiếp tục duy trì quyền truy cập.
+  - Khắc phục:
+    1. Trong `AuthService.refresh()`: Khi phát hiện `session.revokedAt !== null`, ghi cảnh báo bảo mật (`logger.warn`) và thực thi batch update:
+       ```typescript
+       await this.prisma.refreshTokenSession.updateMany({
+         where: {
+           userId: session.userId,
+           revokedAt: null,
+         },
+         data: {
+           revokedAt: new Date(),
+         },
+       });
+       ```
+       Đảm bảo toàn bộ Token Family (tất cả các phiên đăng nhập của người dùng) bị hủy bỏ ngay lập tức, ép buộc người dùng phải đăng nhập lại và đổi mật khẩu nếu cần.
+    2. Cập nhật integration test `1.6.3` trong `auth.critical-flow.integration.test.mjs`: Kiểm tra khi token cũ bị reuse, không chỉ token đó bị từ chối mà session anh em (sibling session) cũng bị thu hồi ngay lập tức trong database thực tế.
+- **Commands executed & Results:**
+  - `npm run test:integration --workspace=@phanbonshop/auth-service` -> **5/5 PASS** (3428ms trên MySQL test_auth_db).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE4-02`
+- **Finding:** Xác thực Magic Bytes nhị phân cho tệp tải lên và triệt để chặn tệp SVG chống Stored XSS / MIME Spoofing (`AUD-P2-004`).
+- **Files affected:**
+  - `packages/shared-utils/src/validation.ts`
+  - `packages/shared-utils/test/utils.test.mjs`
+  - `services/product-service/src/minio/minio.service.ts`
+  - `services/content-service/src/minio/minio.service.ts`
+- **Root cause & Fix:**
+  - Trước đây, hệ thống chỉ dựa vào `file.mimetype` và phần mở rộng do client gửi lên (dễ dàng bị làm giả qua curl/Postman). Nếu attacker tải lên file SVG chứa mã độc `<script>` hoặc file HTML ngụy trang bằng đuôi `.jpg`, tệp tin sẽ được lưu thẳng lên MinIO và phân phát công khai, gây nguy cơ Stored XSS nghiêm trọng.
+  - Khắc phục:
+    1. Xây dựng tiện ích xác thực chuẩn `validateImageMagicBytes()` trong `@phanbonshop/shared-utils`:
+       - Chặn tuyệt đối phần mở rộng `.svg` / `.svgz` và MIME type `image/svg+xml`.
+       - Kiểm tra Magic Bytes nhị phân thuần trên buffer:
+         - **JPEG**: `0xFF, 0xD8, 0xFF`
+         - **PNG**: `0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A`
+         - **GIF**: `GIF87a` hoặc `GIF89a`
+         - **WebP**: `RIFF` (bytes 0..3) kết hợp `WEBP` (bytes 8..11)
+       - Quét 512 bytes đầu tiên để phát hiện và ngăn chặn mã SVG/XML ẩn danh (`<?xml`, `<svg`, `<!DOCTYPE svg`) được ngụy trang dưới đuôi ảnh raster.
+    2. Tích hợp `validateImageMagicBytes` vào `MinioService.uploadFile()` của cả `product-service` và `content-service`, ném `BadRequestException` với thông điệp rõ ràng nếu tệp vi phạm.
+    3. Viết 9 unit tests chuyên biệt trong `packages/shared-utils/test/utils.test.mjs` bao phủ các ca kiểm thử: JPEG, PNG, GIF, WebP hợp lệ; chặn file .svg; chặn SVG ngụy trang thành PNG; chặn XML ngụy trang thành JPEG; chặn file nhị phân/shell script rác; và chặn buffer dưới 12 bytes.
+- **Commands executed & Results:**
+  - `npm test --workspace=@phanbonshop/shared-utils` -> **17/17 PASS** (25ms).
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE4-03`
+- **Finding:** Thu dọn tệp rác mồ côi (Orphan Object Cleanup) trên MinIO S3 khi bài viết, banner hoặc ảnh sản phẩm bị xóa hoặc cập nhật (`AUD-P2-005`).
+- **Files affected:**
+  - `services/product-service/src/minio/minio.service.ts`
+  - `services/product-service/src/product/product.service.ts`
+  - `services/content-service/src/minio/minio.service.ts`
+  - `services/content-service/src/posts/posts.service.ts`
+  - `services/content-service/src/banners/banners.service.ts`
+- **Root cause & Fix:**
+  - Trong `content-service`, khi bài viết blog (`Post`) hoặc banner quảng cáo (`Banner`) bị xóa qua API `DELETE`, bản ghi database bị xóa nhưng ảnh bìa tương ứng trên MinIO không hề được dọn dẹp, gây lãng phí dung lượng lưu trữ lâu dài. Tương tự, khi ảnh bìa được cập nhật thay thế bằng ảnh mới, ảnh cũ cũng bị bỏ rơi trên bucket.
+  - Khắc phục:
+    1. Bổ sung hàm tiện ích `extractObjectKey(urlOrKey: string): string | null` trong cả hai `MinioService` (`product-service` và `content-service`), hỗ trợ bóc tách objectKey chính xác dù dữ liệu lưu là URL tuyệt đối (`http://localhost:9000/content-images/posts/...`) hay object key tương đối.
+    2. Trong `services/content-service/src/posts/posts.service.ts`:
+       - Inject `MinioService`.
+       - Trong `deletePost(id)`: Tự động trích xuất key và gọi `minioService.deleteFile(objectKey)` nếu `existing.coverImageUrl` tồn tại.
+       - Trong `updatePost(id, dto)`: Tự động xóa ảnh cũ trên MinIO khi người dùng thay đổi ảnh bìa mới.
+    3. Trong `services/content-service/src/banners/banners.service.ts`:
+       - Inject `MinioService`.
+       - Trong `deleteBanner(id)`: Tự động trích xuất key và gọi `minioService.deleteFile(objectKey)` nếu `existing.imageUrl` tồn tại.
+       - Trong `updateBanner(id, dto)`: Tự động xóa ảnh cũ trên MinIO khi cập nhật URL ảnh mới.
+    4. Kiểm tra và xác nhận `product-service`: Hàm `delete(id)` đã có logic duyệt qua `product.images` và gọi `minioService.deleteFile(img.objectKey)`, cũng như `deleteImage(id, imageId)` xóa đúng tệp trên MinIO.
+- **Status:** PASS
+
+---
+
+#### Task ID: `TASK-PHASE4-04`
+- **Finding:** Thực thi kiểm thử hồi quy toàn diện Monorepo sau Phase 4.
+- **Commands executed & Results:**
+  1. `npm run lint` -> Exit code: **0** (0 errors, 0 warnings trên toàn bộ monorepo).
+  2. `npm run typecheck` -> Exit code: **0** (0 type errors trên toàn bộ 12 workspaces).
+  3. `npm test` -> Exit code: **0** (Toàn bộ 32 unit tests PASS trên tất cả các package/service/frontend).
+  4. `npm run test:integration --workspace=@phanbonshop/auth-service` -> Exit code: **0** (5/5 tests PASS).
+  5. `npm run test:integration --workspace=@phanbonshop/inventory-service` -> Exit code: **0** (6/6 tests PASS).
+  6. `npm run test:integration --workspace=@phanbonshop/order-service` -> Exit code: **0** (8/8 tests PASS).
+  7. `npm run build` -> Exit code: **0** (Toàn bộ 12 packages/services/apps compile thành công, Next.js frontend sinh 29/29 routes).
+- **Status:** PASS
+
+
 
 
 

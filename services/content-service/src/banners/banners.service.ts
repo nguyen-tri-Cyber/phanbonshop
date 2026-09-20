@@ -2,10 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Prisma, BannerStatus } from '../../generated/client/index.js';
 import { CreateBannerDto, UpdateBannerDto } from './dto/banner.dto.js';
+import { MinioService } from '../minio/minio.service.js';
 
 @Injectable()
 export class BannersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly minioService: MinioService,
+  ) {}
 
   /**
    * [Public] Lấy danh sách banner công khai theo vị trí (HOME_HERO, SIDEBAR...)
@@ -73,7 +77,16 @@ export class BannersService {
 
     const data: Prisma.BannerUpdateInput = {};
     if (dto.title !== undefined) data.title = dto.title.trim();
-    if (dto.imageUrl !== undefined) data.imageUrl = dto.imageUrl.trim();
+    if (dto.imageUrl !== undefined) {
+      const cleanUrl = dto.imageUrl.trim();
+      if (cleanUrl !== existing.imageUrl && existing.imageUrl) {
+        const oldKey = this.minioService.extractObjectKey(existing.imageUrl);
+        if (oldKey) {
+          await this.minioService.deleteFile(oldKey);
+        }
+      }
+      data.imageUrl = cleanUrl;
+    }
     if (dto.targetUrl !== undefined) data.targetUrl = dto.targetUrl?.trim() || null;
     if (dto.position !== undefined) data.position = dto.position.trim();
     if (dto.startAt !== undefined) data.startAt = dto.startAt ? new Date(dto.startAt) : null;
@@ -94,6 +107,13 @@ export class BannersService {
     const existing = await this.prisma.banner.findUnique({ where: { id } });
     if (!existing) {
       throw new NotFoundException(`Không tìm thấy banner với ID: ${id}`);
+    }
+
+    if (existing.imageUrl) {
+      const objectKey = this.minioService.extractObjectKey(existing.imageUrl);
+      if (objectKey) {
+        await this.minioService.deleteFile(objectKey);
+      }
     }
 
     await this.prisma.banner.delete({ where: { id } });

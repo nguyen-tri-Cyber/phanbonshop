@@ -1,9 +1,10 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, BadRequestException } from '@nestjs/common';
 import * as Minio from 'minio';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { createLogger } from '@phanbonshop/logger';
 import { getEnvString } from '@phanbonshop/config';
+import { validateImageMagicBytes } from '@phanbonshop/shared-utils';
 
 const logger = createLogger('content-service:minio');
 
@@ -79,7 +80,13 @@ export class MinioService implements OnModuleInit {
   }
 
   async uploadFile(file: UploadedFileDto, prefix: string = 'posts'): Promise<UploadResult> {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    // 1. Kiểm tra Magic Bytes và chặn SVG (AUD-P2-004)
+    const validation = validateImageMagicBytes(file.buffer, file.originalname, file.mimetype);
+    if (!validation.valid) {
+      throw new BadRequestException(validation.error || 'Tập tin hình ảnh không hợp lệ');
+    }
+
+    const ext = path.extname(file.originalname).toLowerCase() || `.${validation.detectedFormat || 'jpg'}`;
     const objectKey = `${prefix}/${randomUUID()}${ext}`;
 
     await this.client.putObject(
@@ -87,7 +94,7 @@ export class MinioService implements OnModuleInit {
       objectKey,
       file.buffer,
       file.size,
-      { 'Content-Type': file.mimetype },
+      { 'Content-Type': validation.mimeType || file.mimetype },
     );
 
     const protocol = this.useSSL ? 'https' : 'http';
@@ -97,9 +104,23 @@ export class MinioService implements OnModuleInit {
     return { objectKey, url };
   }
 
+  extractObjectKey(urlOrKey: string): string | null {
+    if (!urlOrKey) return null;
+    if (!urlOrKey.startsWith('http://') && !urlOrKey.startsWith('https://')) {
+      return urlOrKey;
+    }
+    const marker = `/${this.bucketName}/`;
+    const idx = urlOrKey.indexOf(marker);
+    if (idx !== -1) {
+      return urlOrKey.slice(idx + marker.length);
+    }
+    return null;
+  }
+
   async deleteFile(objectKey: string): Promise<void> {
     try {
       await this.client.removeObject(this.bucketName, objectKey);
+      logger.info(`Đã xóa tệp tin trên MinIO: ${objectKey}`);
     } catch (error) {
       logger.warn(`Không thể xóa file ${objectKey} khỏi MinIO`, { error: (error as Error).message });
     }

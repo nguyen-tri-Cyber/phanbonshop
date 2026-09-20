@@ -1,6 +1,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatVND, createMoneyVND, toVietnameseSlug, isValidVNPhoneNumber, normalizeVNPhoneNumber, VIETNAM_DIVISIONS } from '../dist/index.js';
+import {
+  formatVND,
+  createMoneyVND,
+  toVietnameseSlug,
+  isValidVNPhoneNumber,
+  normalizeVNPhoneNumber,
+  VIETNAM_DIVISIONS,
+  validateImageMagicBytes,
+} from '../dist/index.js';
 
 describe('Shared Utils Unit Tests', () => {
 
@@ -49,6 +57,82 @@ describe('Shared Utils Unit Tests', () => {
       assert.strictEqual(normalizeVNPhoneNumber('+84901234567'), '0901234567');
       assert.strictEqual(normalizeVNPhoneNumber('84901234567'), '0901234567');
       assert.strictEqual(normalizeVNPhoneNumber('0901234567'), '0901234567');
+    });
+  });
+
+  describe('Image Magic Bytes Validation & SVG Blocking (AUD-P2-004)', () => {
+    test('accepts valid JPEG buffer', () => {
+      const buf = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(30)]);
+      const res = validateImageMagicBytes(buf, 'photo.jpg', 'image/jpeg');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.detectedFormat, 'jpeg');
+      assert.strictEqual(res.mimeType, 'image/jpeg');
+    });
+
+    test('accepts valid PNG buffer', () => {
+      const buf = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(30),
+      ]);
+      const res = validateImageMagicBytes(buf, 'image.png', 'image/png');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.detectedFormat, 'png');
+      assert.strictEqual(res.mimeType, 'image/png');
+    });
+
+    test('accepts valid GIF buffer', () => {
+      const buf = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(20)]);
+      const res = validateImageMagicBytes(buf, 'animation.gif', 'image/gif');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.detectedFormat, 'gif');
+      assert.strictEqual(res.mimeType, 'image/gif');
+    });
+
+    test('accepts valid WebP buffer', () => {
+      const header = Buffer.alloc(16);
+      header.write('RIFF', 0);
+      header.writeUInt32LE(100, 4);
+      header.write('WEBP', 8);
+      const buf = Buffer.concat([header, Buffer.alloc(30)]);
+      const res = validateImageMagicBytes(buf, 'banner.webp', 'image/webp');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.detectedFormat, 'webp');
+      assert.strictEqual(res.mimeType, 'image/webp');
+    });
+
+    test('blocks SVG by file extension', () => {
+      const buf = Buffer.from('<svg></svg>');
+      const res = validateImageMagicBytes(buf, 'icon.svg', 'image/svg+xml');
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.error?.includes('SVG'));
+    });
+
+    test('blocks SVG disguised as PNG with malicious SVG content', () => {
+      const buf = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+      const res = validateImageMagicBytes(buf, 'harmless.png', 'image/png');
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.error?.includes('SVG'));
+    });
+
+    test('blocks XML disguised as JPEG', () => {
+      const buf = Buffer.from('<?xml version="1.0"?><svg><script></script></svg>');
+      const res = validateImageMagicBytes(buf, 'fake.jpg', 'image/jpeg');
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.error?.includes('SVG') || res.error?.includes('định dạng'));
+    });
+
+    test('rejects arbitrary binary or script file', () => {
+      const buf = Buffer.from('#!/bin/bash\necho "exploit"\n');
+      const res = validateImageMagicBytes(buf, 'script.png', 'image/png');
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.error?.includes('định dạng'));
+    });
+
+    test('rejects buffer smaller than minimum required bytes', () => {
+      const buf = Buffer.from([0x01, 0x02]);
+      const res = validateImageMagicBytes(buf, 'tiny.jpg', 'image/jpeg');
+      assert.strictEqual(res.valid, false);
+      assert.ok(res.error?.includes('quá nhỏ'));
     });
   });
 
