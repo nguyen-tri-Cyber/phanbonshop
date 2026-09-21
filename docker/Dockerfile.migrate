@@ -29,6 +29,16 @@ COPY services/inventory-service/prisma ./services/inventory-service/prisma
 COPY services/customer-service/prisma  ./services/customer-service/prisma
 COPY services/content-service/prisma   ./services/content-service/prisma
 
+# Resolve and cache Prisma's native migration engine at image-build time.
+# Production containers run on an internal network and must never download
+# executables from binaries.prisma.sh during startup.
+RUN npx prisma generate --schema=services/auth-service/prisma/schema.prisma && \
+    npx prisma generate --schema=services/product-service/prisma/schema.prisma && \
+    npx prisma generate --schema=services/order-service/prisma/schema.prisma && \
+    npx prisma generate --schema=services/inventory-service/prisma/schema.prisma && \
+    npx prisma generate --schema=services/customer-service/prisma/schema.prisma && \
+    npx prisma generate --schema=services/content-service/prisma/schema.prisma
+
 # Copy migration script
 COPY scripts ./scripts
 COPY packages ./packages

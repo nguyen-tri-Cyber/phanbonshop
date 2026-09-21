@@ -1184,7 +1184,7 @@ MinIO Init Buckets                     (auth, product, order, inventory, custome
                                      Nginx Reverse Proxy
                                                 │
                                                 ▼
-                                         [ READY FOR TRAFFIC ]
+                              [ RELEASE GATES REQUIRED — SEE READINESS REPORT ]
 ```
 
 ---
@@ -1462,6 +1462,10 @@ docker compose -f docker-compose.prod.yml up --build -d
 ---
 
 ## 40. Production Readiness Assessment (Đánh Giá Độ Sẵn Sàng Vận Hành)
+
+> **Trạng thái hiện tại (2026-09-21): NOT READY.** Xem ma trận kiểm chứng và các release blocker tại
+> [`docs/PRODUCTION_READINESS_REPORT.md`](docs/PRODUCTION_READINESS_REPORT.md). Các mô tả bên dưới
+> là kiến trúc/capability, không phải bằng chứng cho phép go-live.
 
 | Hạng Mục Đánh Giá | Trạng Thái | Minh Chứng Thực Tế & Khoảng Trống Kỹ Thuật (Gaps) |
 | :--- | :---: | :--- |

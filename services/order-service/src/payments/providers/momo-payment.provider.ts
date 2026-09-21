@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import crypto from 'node:crypto';
 import {
   PaymentProvider,
@@ -28,30 +28,54 @@ export interface MomoConfig {
   storeId?: string;
 }
 
+export interface PublicMomoConfig {
+  enabled: boolean;
+  provider: 'MOMO';
+  environment: 'sandbox' | 'production';
+}
+
 @Injectable()
 export class MomoPaymentProvider implements PaymentProvider {
   readonly providerName = 'MOMO';
   readonly supportedMethod = PaymentMethod.MOMO;
 
   private readonly config: MomoConfig;
+  private readonly enabled: boolean;
+  private readonly isProduction = process.env.NODE_ENV === 'production';
 
   constructor() {
+    this.enabled = ['1', 'true', 'yes'].includes(
+      String(process.env.MOMO_ENABLED || 'false').toLowerCase(),
+    );
+
+    const requiredWhenEnabled = [
+      'MOMO_PARTNER_CODE',
+      'MOMO_ACCESS_KEY',
+      'MOMO_SECRET_KEY',
+      'MOMO_API_ENDPOINT',
+      'MOMO_QUERY_ENDPOINT',
+      'MOMO_REDIRECT_URL',
+      'MOMO_IPN_URL',
+    ];
+    if (this.enabled) {
+      const missing = requiredWhenEnabled.filter(
+        (key) => !process.env[key] || process.env[key]?.trim() === '',
+      );
+      if (missing.length > 0) {
+        throw new Error(
+          `[ConfigError] MoMo is enabled but required variables are missing: ${missing.join(', ')}`,
+        );
+      }
+    }
+
     this.config = {
-      partnerCode: process.env.MOMO_PARTNER_CODE || 'MOMOBKUN20180529',
-      accessKey: process.env.MOMO_ACCESS_KEY || 'klm05TvNBzhg7h7j',
-      secretKey: process.env.MOMO_SECRET_KEY || 'at67qH6mk8w5Y1nAyMoYKMWACiEi2Aca',
-      apiEndpoint:
-        process.env.MOMO_API_ENDPOINT ||
-        'https://test-payment.momo.vn/v2/gateway/api/create',
-      queryEndpoint:
-        process.env.MOMO_QUERY_ENDPOINT ||
-        'https://test-payment.momo.vn/v2/gateway/api/query',
-      redirectUrl:
-        process.env.MOMO_REDIRECT_URL ||
-        'http://localhost:3000/checkout/thanh-cong',
-      ipnUrl:
-        process.env.MOMO_IPN_URL ||
-        'http://localhost:3003/api/v1/payments/momo/ipn',
+      partnerCode: process.env.MOMO_PARTNER_CODE || '',
+      accessKey: process.env.MOMO_ACCESS_KEY || '',
+      secretKey: process.env.MOMO_SECRET_KEY || '',
+      apiEndpoint: process.env.MOMO_API_ENDPOINT || '',
+      queryEndpoint: process.env.MOMO_QUERY_ENDPOINT || '',
+      redirectUrl: process.env.MOMO_REDIRECT_URL || '',
+      ipnUrl: process.env.MOMO_IPN_URL || '',
       partnerName: process.env.MOMO_PARTNER_NAME || 'Phan Bón Shop',
       storeId: process.env.MOMO_STORE_ID || 'PhanBonShop',
     };
@@ -59,6 +83,16 @@ export class MomoPaymentProvider implements PaymentProvider {
 
   getConfig(): MomoConfig {
     return { ...this.config };
+  }
+
+  getPublicConfig(): PublicMomoConfig {
+    return {
+      enabled: this.enabled,
+      provider: 'MOMO',
+      environment: this.config.apiEndpoint.includes('test-payment') || !this.isProduction
+        ? 'sandbox'
+        : 'production',
+    };
   }
 
   /**
@@ -93,6 +127,9 @@ export class MomoPaymentProvider implements PaymentProvider {
    * Khởi tạo giao dịch thanh toán MoMo (All-in-one / QR / App redirect)
    */
   async createPayment(payload: OrderPaymentPayload): Promise<PaymentCreationResult> {
+    if (!this.enabled) {
+      throw new ServiceUnavailableException('MoMo payment is not enabled');
+    }
     const requestId = `${payload.orderNumber}_${Date.now()}`;
     const orderId = payload.orderNumber;
     const amount = Math.round(payload.amount);
@@ -147,6 +184,8 @@ export class MomoPaymentProvider implements PaymentProvider {
             status: PaymentStatus.PENDING,
             transactionReference: `MOMO-${payload.orderNumber}`,
             transactionId: String(responseData.requestId || requestId),
+            providerOrderId: orderId,
+            providerRequestId: String(responseData.requestId || requestId),
             payUrl: String(responseData.payUrl),
             qrCodeUrl: String(responseData.qrCodeUrl || responseData.payUrl),
             instruction:
@@ -160,8 +199,19 @@ export class MomoPaymentProvider implements PaymentProvider {
         }
       }
     } catch (err) {
+      if (this.isProduction) {
+        throw new ServiceUnavailableException(
+          `MoMo Gateway is unavailable: ${(err as Error).message}`,
+        );
+      }
       logger.warn(
         `Không thể kết nối MoMo Gateway trực tiếp (${(err as Error).message}), chuyển sang cơ chế MoMo Sandbox Offline Fallback.`,
+      );
+    }
+
+    if (this.isProduction) {
+      throw new ServiceUnavailableException(
+        'MoMo Gateway rejected the payment creation request',
       );
     }
 
@@ -175,6 +225,8 @@ export class MomoPaymentProvider implements PaymentProvider {
       status: PaymentStatus.PENDING,
       transactionReference: `MOMO-${payload.orderNumber}`,
       transactionId: requestId,
+      providerOrderId: orderId,
+      providerRequestId: requestId,
       payUrl: mockPayUrl,
       qrCodeUrl: mockQrUrl,
       instruction:
@@ -202,6 +254,21 @@ export class MomoPaymentProvider implements PaymentProvider {
   ): Promise<PaymentWebhookResult> {
     const data = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
 
+    if (!this.enabled) {
+      logger.warn('PAYMENT_WEBHOOK_PROVIDER_DISABLED', {
+        provider: this.providerName,
+      });
+      return {
+        isValid: false,
+        status: PaymentStatus.FAILED,
+        isPaid: false,
+        isFailed: true,
+        isExpired: false,
+        errorMessage: 'MoMo payment is not enabled',
+        rawResponse: data,
+      };
+    }
+
     const accessKey = this.config.accessKey;
     const amount = Number(data.amount || 0);
     const extraData = String(data.extraData ?? '');
@@ -224,9 +291,11 @@ export class MomoPaymentProvider implements PaymentProvider {
     const isSignatureValid = this.compareSignatures(signature, expectedSignature);
 
     if (!isSignatureValid) {
-      logger.warn(
-        `Chữ ký MoMo Webhook không hợp lệ: expected ${expectedSignature}, received ${signature}`,
-      );
+      logger.warn('PAYMENT_WEBHOOK_INVALID_SIGNATURE', {
+        provider: this.providerName,
+        providerOrderId: orderId,
+        providerRequestId: requestId,
+      });
       return {
         isValid: false,
         status: PaymentStatus.FAILED,
@@ -258,6 +327,9 @@ export class MomoPaymentProvider implements PaymentProvider {
         orderId: (data.customOrderId as string) || undefined,
         transactionId: transId || requestId,
         transactionReference: `MOMO-${orderId}`,
+        providerOrderId: orderId,
+        providerRequestId: requestId,
+        providerTransactionId: transId,
         amount,
         status: PaymentStatus.PAID,
         isPaid: true,
@@ -275,6 +347,9 @@ export class MomoPaymentProvider implements PaymentProvider {
         orderNumber: orderId,
         transactionId: transId || requestId,
         transactionReference: `MOMO-${orderId}`,
+        providerOrderId: orderId,
+        providerRequestId: requestId,
+        providerTransactionId: transId || undefined,
         amount,
         status: PaymentStatus.EXPIRED,
         isPaid: false,
@@ -292,6 +367,9 @@ export class MomoPaymentProvider implements PaymentProvider {
       orderNumber: orderId,
       transactionId: transId || requestId,
       transactionReference: `MOMO-${orderId}`,
+      providerOrderId: orderId,
+      providerRequestId: requestId,
+      providerTransactionId: transId || undefined,
       amount,
       status: PaymentStatus.FAILED,
       isPaid: false,

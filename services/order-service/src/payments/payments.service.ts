@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -28,6 +29,7 @@ import {
 import { PaymentStateMachine } from './payment-state-machine.js';
 import { CompensationService } from '../compensation/compensation.service.js';
 import { createLogger } from '@phanbonshop/logger';
+import { getEnvString } from '@phanbonshop/config';
 
 const logger = createLogger('order-service:payments');
 
@@ -40,14 +42,19 @@ export interface CreatedPaymentResult {
   payUrl?: string;
 }
 
+export interface PaymentActor {
+  userId: string;
+  role: string;
+}
+
 const ALLOWED_CONFIRM_ROLES = new Set(['ADMIN', 'MANAGER', 'STAFF', 'SUPER_ADMIN']);
+const PRIVILEGED_PAYMENT_ROLES = ALLOWED_CONFIRM_ROLES;
 
 @Injectable()
 export class PaymentsService {
   private readonly inventoryServiceUrl =
     process.env.INVENTORY_SERVICE_URL || 'http://localhost:3004';
-  private readonly internalSecret =
-    process.env.INTERNAL_SERVICE_SECRET || 'phanbon_internal_secret';
+  private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
 
   constructor(
     private readonly prisma: PrismaService,
@@ -68,7 +75,19 @@ export class PaymentsService {
    * Lấy cấu hình cổng MoMo Sandbox
    */
   getMomoSettings() {
-    return this.momoProvider.getConfig();
+    return this.momoProvider.getPublicConfig();
+  }
+
+  private assertOrderAccess(
+    order: { customerId: string },
+    actor: PaymentActor,
+  ): void {
+    if (
+      !PRIVILEGED_PAYMENT_ROLES.has(actor.role) &&
+      order.customerId !== actor.userId
+    ) {
+      throw new ForbiddenException('Bạn không có quyền thao tác trên đơn hàng này');
+    }
   }
 
   /**
@@ -122,6 +141,8 @@ export class PaymentsService {
         amount: params.amount,
         status: PaymentTransactionStatus.PENDING,
         transactionId: initResult.transactionReference,
+        providerOrderId: initResult.providerOrderId,
+        providerRequestId: initResult.providerRequestId,
         rawRequest: JSON.stringify(params),
         rawResponse: initResult.paymentDetails
           ? JSON.stringify(initResult.paymentDetails)
@@ -151,7 +172,7 @@ export class PaymentsService {
   async createPaymentAttempt(
     orderId: string,
     method: PaymentMethod,
-    customerId: string,
+    actor: PaymentActor,
   ): Promise<CreatedPaymentResult> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -162,9 +183,7 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy đơn hàng ID: ${orderId}`);
     }
 
-    if (order.customerId !== customerId) {
-      throw new ForbiddenException('Bạn không có quyền thao tác trên đơn hàng này');
-    }
+    this.assertOrderAccess(order, actor);
 
     if (order.paymentStatus === PaymentStatus.PAID) {
       throw new BadRequestException('Đơn hàng đã được thanh toán thành công, không thể tạo phiên thanh toán mới');
@@ -224,7 +243,9 @@ export class PaymentsService {
           amount: order.totalAmount,
           status: PaymentTransactionStatus.PENDING,
           transactionId: initResult.transactionReference,
-          rawRequest: JSON.stringify({ orderId, method, customerId }),
+          providerOrderId: initResult.providerOrderId,
+          providerRequestId: initResult.providerRequestId,
+          rawRequest: JSON.stringify({ orderId, method, actorId: actor.userId }),
           rawResponse: initResult.paymentDetails
             ? JSON.stringify(initResult.paymentDetails)
             : null,
@@ -242,7 +263,7 @@ export class PaymentsService {
       });
 
       logger.info(
-        `Khách hàng ${customerId} đã tạo lần thử thanh toán mới (Tx: ${paymentTransaction.id}) cho đơn ${order.orderNumber} qua ${method}`,
+        `Actor ${actor.userId} đã tạo lần thử thanh toán mới (Tx: ${paymentTransaction.id}) cho đơn ${order.orderNumber} qua ${method}`,
       );
 
       return {
@@ -259,7 +280,12 @@ export class PaymentsService {
   /**
    * Lấy bản ghi thanh toán của một đơn hàng
    */
-  async getPaymentByOrderId(orderId: string) {
+  async getPaymentByOrderId(orderId: string, actor: PaymentActor) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng ID: ${orderId}`);
+    }
+    this.assertOrderAccess(order, actor);
     return this.prisma.paymentRecord.findFirst({
       where: { orderId },
       include: {
@@ -276,7 +302,7 @@ export class PaymentsService {
   /**
    * Lấy chi tiết bản ghi thanh toán theo ID
    */
-  async getPaymentById(paymentId: string) {
+  async getPaymentById(paymentId: string, actor: PaymentActor) {
     const payment = await this.prisma.paymentRecord.findUnique({
       where: { id: paymentId },
       include: {
@@ -294,13 +320,23 @@ export class PaymentsService {
       throw new NotFoundException(`Không tìm thấy giao dịch thanh toán ID: ${paymentId}`);
     }
 
+    this.assertOrderAccess(payment.order, actor);
+
     return payment;
   }
 
   /**
    * Lấy toàn bộ lịch sử các lần thử thanh toán của một đơn hàng
    */
-  async getOrderTransactions(orderId: string): Promise<PaymentTransaction[]> {
+  async getOrderTransactions(
+    orderId: string,
+    actor: PaymentActor,
+  ): Promise<PaymentTransaction[]> {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng ID: ${orderId}`);
+    }
+    this.assertOrderAccess(order, actor);
     return this.prisma.paymentTransaction.findMany({
       where: { orderId },
       orderBy: { createdAt: 'desc' },
@@ -323,7 +359,10 @@ export class PaymentsService {
       );
     }
 
-    const payment = await this.getPaymentById(paymentId);
+    const payment = await this.getPaymentById(paymentId, {
+      userId: actorId,
+      role: actorRole,
+    });
     const order = payment.order;
 
     // 2. Idempotency Check: Nếu đã thanh toán rồi thì trả về kết quả cũ
@@ -353,8 +392,8 @@ export class PaymentsService {
 
     // 5. Cập nhật trạng thái trong Transaction
     const transactionResult = await this.prisma.$transaction(async (tx) => {
-      const updatedPayment = await tx.paymentRecord.update({
-        where: { id: paymentId },
+      const claim = await tx.paymentRecord.updateMany({
+        where: { id: paymentId, status: payment.status },
         data: {
           status: PaymentStatus.PAID,
           paidAt: new Date(),
@@ -362,6 +401,33 @@ export class PaymentsService {
             dto.transactionReference || payment.transactionReference,
         },
       });
+
+      if (claim.count === 0) {
+        const [existingPayment, existingOrder] = await Promise.all([
+          tx.paymentRecord.findUnique({ where: { id: paymentId } }),
+          tx.order.findUnique({ where: { id: order.id } }),
+        ]);
+        if (!existingPayment || !existingOrder) {
+          throw new NotFoundException(`Không tìm thấy thanh toán hoặc đơn hàng ${paymentId}`);
+        }
+        if (existingPayment.status !== PaymentStatus.PAID) {
+          throw new ConflictException(
+            `Thanh toán ${paymentId} đã chuyển sang trạng thái ${existingPayment.status} và không thể xác nhận là PAID`,
+          );
+        }
+        return {
+          updatedPayment: existingPayment,
+          updatedOrder: existingOrder,
+          duplicate: true,
+        };
+      }
+
+      const updatedPayment = await tx.paymentRecord.findUnique({
+        where: { id: paymentId },
+      });
+      if (!updatedPayment) {
+        throw new NotFoundException(`Không tìm thấy giao dịch thanh toán ID: ${paymentId}`);
+      }
 
       // Cập nhật hoặc tạo mới PaymentTransaction sang SUCCESS
       await tx.paymentTransaction.create({
@@ -425,6 +491,34 @@ export class PaymentsService {
         },
       });
 
+      const orderWithItems = await tx.order.findUnique({
+        where: { id: order.id },
+        include: { items: true },
+      });
+      if (orderWithItems?.reservationId) {
+        for (const item of orderWithItems.items) {
+          const reservationId = `${orderWithItems.reservationId}-${item.variantId}`;
+          await tx.compensationTask.upsert({
+            where: { idempotencyKey: `commit:${reservationId}` },
+            create: {
+              type: CompensationTaskType.COMMIT_INVENTORY,
+              idempotencyKey: `commit:${reservationId}`,
+              payload: JSON.stringify({
+                reservationId,
+                referenceId: order.orderNumber,
+                orderId: order.id,
+                paymentId,
+                requestId: `manual-${paymentId}`,
+              }),
+              status: 'PENDING',
+              maxRetries: 60,
+              nextAttemptAt: new Date(),
+            },
+            update: {},
+          });
+        }
+      }
+
       // Ghi lịch sử đơn hàng
       await tx.orderStatusHistory.create({
         data: {
@@ -440,15 +534,14 @@ export class PaymentsService {
         `Admin ${actorId} (${actorRole}) đã xác nhận thanh toán thành công cho đơn ${order.orderNumber} (Số tiền: ${expectedAmount}đ)`,
       );
 
-      return { updatedPayment, updatedOrder };
+      return { updatedPayment, updatedOrder, duplicate: false };
     });
-
-    // 6. Cam kết xuất kho vật lý (Commit Inventory) để tránh bị Expiry Worker dọn dẹp nhầm
-    await this.commitOrderInventory(order.id, order.orderNumber);
 
     return {
       success: true,
-      message: 'Xác nhận thanh toán thành công',
+      message: transactionResult.duplicate
+        ? 'Thanh toán đã được xác nhận trước đó (Idempotent)'
+        : 'Xác nhận thanh toán thành công',
       payment: transactionResult.updatedPayment,
       order: transactionResult.updatedOrder,
     };
@@ -488,106 +581,243 @@ export class PaymentsService {
       };
     }
 
-    // 2. Tìm đơn hàng liên kết
-    const order = await this.prisma.order.findFirst({
-      where: {
-        OR: [
-          { orderNumber: webhookResult.orderNumber },
-          { id: webhookResult.orderId },
-        ],
-      },
-      include: { payments: true },
-    });
+    const providerOrderId =
+      webhookResult.providerOrderId || webhookResult.orderNumber;
+    const providerRequestId = webhookResult.providerRequestId;
+    const providerTransactionId =
+      webhookResult.providerTransactionId || webhookResult.transactionId;
 
-    if (!order) {
-      logger.error(`Webhook nhận được mã đơn không tồn tại: ${webhookResult.orderNumber}`);
+    if (!providerOrderId) {
       return {
         success: false,
-        message: `Không tìm thấy đơn hàng tương ứng với webhook: ${webhookResult.orderNumber}`,
+        message: 'Webhook không có provider order identifier',
       };
     }
 
-    // 3. Idempotency Check: Nếu đơn đã PAID trước đó, trả về thành công không chạy lại side-effect
-    if (order.paymentStatus === PaymentStatus.PAID) {
-      logger.info(
-        `[Idempotent] Đơn hàng ${order.orderNumber} đã thanh toán PAID trước đó. Bỏ qua webhook trùng lặp.`,
-        { transactionId: webhookResult.transactionId },
-      );
-      return {
-        success: true,
-        message: 'Đơn hàng đã được thanh toán trước đó (Idempotent webhook)',
-        transactionId: webhookResult.transactionId,
-      };
-    }
-
-    // 4. Xử lý theo kết quả xác thực
+    // A successful financial transition is one database transaction: resolve the
+    // exact attempt, validate the expected amount, claim it once, mark paid, and
+    // persist inventory commit intent before acknowledging the provider.
     if (webhookResult.isPaid) {
-      await this.prisma.$transaction(async (tx) => {
-        // Cập nhật PaymentRecord
-        const paymentRecord = order.payments?.[0];
-        if (paymentRecord) {
-          await tx.paymentRecord.update({
-            where: { id: paymentRecord.id },
+      if (!providerTransactionId || webhookResult.amount === undefined) {
+        return {
+          success: false,
+          message: 'Webhook thanh toán thiếu transaction id hoặc amount',
+        };
+      }
+
+      try {
+        const outcome = await this.prisma.$transaction(async (tx) => {
+          const attempt = await tx.paymentTransaction.findFirst({
+            where: {
+              provider: provider.providerName,
+              providerOrderId,
+              ...(providerRequestId ? { providerRequestId } : {}),
+            },
+            include: {
+              order: { include: { items: true } },
+              paymentRecord: true,
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+
+          if (!attempt) {
+            return { kind: 'rejected' as const, message: 'Không tìm thấy payment attempt tương ứng' };
+          }
+
+          const expectedAmount = Number(attempt.amount);
+          const receivedAmount = webhookResult.amount;
+          if (
+            !Number.isSafeInteger(receivedAmount) ||
+            receivedAmount !== expectedAmount
+          ) {
+            await tx.auditLog.create({
+              data: {
+                actorId: `WEBHOOK:${provider.providerName}`,
+                actorRole: 'SYSTEM',
+                action: 'PAYMENT_AMOUNT_MISMATCH',
+                entityType: 'PAYMENT_TRANSACTION',
+                entityId: attempt.id,
+                oldValue: JSON.stringify({ expectedAmount }),
+                newValue: JSON.stringify({ receivedAmount }),
+                requestId: providerRequestId,
+              },
+            });
+            return { kind: 'rejected' as const, message: 'Số tiền webhook không khớp payment attempt' };
+          }
+
+          const claim = await tx.paymentTransaction.updateMany({
+            where: {
+              id: attempt.id,
+              status: {
+                in: [
+                  PaymentTransactionStatus.PENDING,
+                  PaymentTransactionStatus.FAILED,
+                  PaymentTransactionStatus.EXPIRED,
+                ],
+              },
+              OR: [
+                {
+                  status: {
+                    in: [
+                      PaymentTransactionStatus.FAILED,
+                      PaymentTransactionStatus.EXPIRED,
+                    ],
+                  },
+                },
+                { providerTransactionId: null },
+                { providerTransactionId },
+              ],
+            },
+            data: {
+              status: PaymentTransactionStatus.SUCCESS,
+              transactionId: providerTransactionId,
+              providerTransactionId,
+              rawRequest: JSON.stringify({ body }),
+              rawResponse: JSON.stringify(webhookResult.rawResponse || {}),
+              errorMessage: null,
+              paidAt: webhookResult.paidAt || new Date(),
+            },
+          });
+
+          if (claim.count === 0) {
+            return { kind: 'duplicate' as const, order: attempt.order };
+          }
+
+          if (!attempt.paymentRecordId) {
+            throw new Error(`Payment attempt ${attempt.id} is not bound to a PaymentRecord`);
+          }
+
+          const paymentRecordClaim = await tx.paymentRecord.updateMany({
+            where: {
+              id: attempt.paymentRecordId,
+              status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+            },
             data: {
               status: PaymentStatus.PAID,
               paidAt: webhookResult.paidAt || new Date(),
-              transactionReference:
-                webhookResult.transactionId || webhookResult.transactionReference,
+              transactionReference: providerTransactionId,
             },
           });
+
+          const order = attempt.order;
+          if (paymentRecordClaim.count === 0) {
+            const currentPaymentRecord = await tx.paymentRecord.findUnique({
+              where: { id: attempt.paymentRecordId },
+              select: { status: true },
+            });
+            if (currentPaymentRecord?.status === PaymentStatus.PAID) {
+              return { kind: 'duplicate' as const, order };
+            }
+            throw new Error(
+              `PaymentRecord ${attempt.paymentRecordId} could not be transitioned to PAID`,
+            );
+          }
+
+          const nextStatus =
+            order.status === OrderStatus.PENDING ? OrderStatus.CONFIRMED : order.status;
+          await tx.order.updateMany({
+            where: { id: order.id, paymentStatus: { not: PaymentStatus.PAID } },
+            data: { paymentStatus: PaymentStatus.PAID, status: nextStatus },
+          });
+
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId: order.id,
+              fromStatus: order.status,
+              toStatus: nextStatus,
+              changedBy: `WEBHOOK:${provider.providerName}`,
+              note: `Tự động xác nhận payment attempt ${attempt.id} (provider tx: ${providerTransactionId})`,
+            },
+          });
+
+          if (order.reservationId) {
+            for (const item of order.items) {
+              const reservationId = `${order.reservationId}-${item.variantId}`;
+              await tx.compensationTask.upsert({
+                where: { idempotencyKey: `commit:${reservationId}` },
+                create: {
+                  type: CompensationTaskType.COMMIT_INVENTORY,
+                  idempotencyKey: `commit:${reservationId}`,
+                  payload: JSON.stringify({
+                    reservationId,
+                    referenceId: order.orderNumber,
+                    orderId: order.id,
+                    paymentAttemptId: attempt.id,
+                    providerTransactionId,
+                    requestId: providerRequestId,
+                  }),
+                  status: 'PENDING',
+                  maxRetries: 60,
+                  nextAttemptAt: new Date(),
+                },
+                update: {},
+              });
+            }
+          }
+
+          return { kind: 'processed' as const, order };
+        });
+
+        if (outcome.kind === 'rejected') {
+          logger.warn('PAYMENT_AMOUNT_MISMATCH', {
+            provider: provider.providerName,
+            providerOrderId,
+            providerRequestId,
+            providerTransactionId,
+            receivedAmount: webhookResult.amount,
+          });
+          return { success: false, message: outcome.message };
         }
 
-        // Tạo bản ghi PaymentTransaction SUCCESS
-        await tx.paymentTransaction.create({
-          data: {
-            orderId: order.id,
-            paymentRecordId: paymentRecord?.id,
+        if (outcome.kind === 'duplicate') {
+          logger.info('PAYMENT_DUPLICATE_WEBHOOK', {
             provider: provider.providerName,
-            method: provider.supportedMethod,
-            amount: webhookResult.amount || order.totalAmount,
-            status: PaymentTransactionStatus.SUCCESS,
-            transactionId: webhookResult.transactionId,
-            rawRequest: JSON.stringify({ headers, body }),
-            rawResponse: JSON.stringify(webhookResult.rawResponse || {}),
-            paidAt: webhookResult.paidAt || new Date(),
-          },
+            providerTransactionId,
+            orderId: outcome.order.id,
+          });
+          return {
+            success: true,
+            message: 'Webhook đã được xử lý trước đó (Idempotent)',
+            transactionId: providerTransactionId,
+          };
+        }
+
+        logger.info('PAYMENT_PAID', {
+          provider: provider.providerName,
+          providerTransactionId,
+          orderId: outcome.order.id,
+          orderNumber: outcome.order.orderNumber,
         });
-
-        // Cập nhật đơn hàng sang CONFIRMED và PAID
-        const nextStatus =
-          order.status === OrderStatus.PENDING ? OrderStatus.CONFIRMED : order.status;
-
-        await tx.order.update({
-          where: { id: order.id },
-          data: {
-            paymentStatus: PaymentStatus.PAID,
-            status: nextStatus,
-          },
-        });
-
-        await tx.orderStatusHistory.create({
-          data: {
-            orderId: order.id,
-            fromStatus: order.status,
-            toStatus: nextStatus,
-            changedBy: `WEBHOOK:${provider.providerName}`,
-            note: `Tự động xác nhận thanh toán qua Webhook ${provider.providerName} (Tx: ${webhookResult.transactionId})`,
-          },
-        });
-      });
-
-      // Cam kết xuất kho vật lý (Commit Inventory)
-      await this.commitOrderInventory(order.id, order.orderNumber);
-
-      logger.info(
-        `Webhook thành công: Đơn hàng ${order.orderNumber} đã thanh toán thành công (Tx: ${webhookResult.transactionId})`,
-      );
-
-      return {
-        success: true,
-        message: 'Xử lý thanh toán webhook thành công',
-        transactionId: webhookResult.transactionId,
-      };
+        return {
+          success: true,
+          message: 'Xử lý thanh toán webhook thành công',
+          transactionId: providerTransactionId,
+        };
+      } catch (err) {
+        if ((err as { code?: string }).code === 'P2002') {
+          const existingProviderTransaction =
+            await this.prisma.paymentTransaction.findFirst({
+              where: {
+                provider: provider.providerName,
+                providerTransactionId,
+              },
+              select: { id: true },
+            });
+          if (!existingProviderTransaction) {
+            throw err;
+          }
+          logger.info('PAYMENT_DUPLICATE_WEBHOOK', {
+            provider: provider.providerName,
+            providerTransactionId,
+          });
+          return {
+            success: true,
+            message: 'Webhook đã được xử lý trước đó (Idempotent)',
+            transactionId: providerTransactionId,
+          };
+        }
+        throw err;
+      }
     }
 
     if (webhookResult.isFailed || webhookResult.isExpired) {
@@ -595,28 +825,41 @@ export class PaymentsService {
         ? PaymentTransactionStatus.EXPIRED
         : PaymentTransactionStatus.FAILED;
 
-      await this.prisma.paymentTransaction.create({
-        data: {
-          orderId: order.id,
+      const attempt = await this.prisma.paymentTransaction.findFirst({
+        where: {
           provider: provider.providerName,
-          method: provider.supportedMethod,
-          amount: webhookResult.amount || order.totalAmount,
+          providerOrderId,
+          ...(providerRequestId ? { providerRequestId } : {}),
+        },
+        include: { order: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!attempt) {
+        return { success: false, message: 'Không tìm thấy payment attempt tương ứng' };
+      }
+
+      const claim = await this.prisma.paymentTransaction.updateMany({
+        where: { id: attempt.id, status: PaymentTransactionStatus.PENDING },
+        data: {
           status: targetStatus,
-          transactionId: webhookResult.transactionId,
+          transactionId: providerTransactionId,
           errorMessage: webhookResult.errorMessage,
-          rawRequest: JSON.stringify({ headers, body }),
+          rawRequest: JSON.stringify({ body }),
           rawResponse: JSON.stringify(webhookResult.rawResponse || {}),
         },
       });
 
-      if (webhookResult.isExpired) {
-        // Hết hạn thanh toán: Giải phóng reservation kho
-        await this.releaseOrderInventory(order.id, 'Hết hạn thời gian thanh toán');
-      }
+      // Do not release inventory directly from a provider callback. A verified
+      // PAID callback may race or arrive after FAILED/EXPIRED. The inventory
+      // expiry worker owns release and checks the order payment disposition
+      // before changing reservation state.
 
       return {
         success: true,
-        message: `Ghi nhận trạng thái ${targetStatus} từ Webhook`,
+        message:
+          claim.count === 1
+            ? `Ghi nhận trạng thái ${targetStatus} từ Webhook`
+            : 'Webhook không làm thay đổi payment attempt đã hoàn tất',
         transactionId: webhookResult.transactionId,
       };
     }

@@ -41,17 +41,15 @@ sudo certbot certonly --standalone \
   -d "${DOMAIN}" \
   ${STAGING_ARG}
 
-# Copy chứng chỉ vào thư mục cấu hình Nginx
-TARGET_DIR="./docker/nginx/certs"
-mkdir -p "${TARGET_DIR}"
-
-sudo cp "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "${TARGET_DIR}/fullchain.pem"
-sudo cp "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "${TARGET_DIR}/privkey.pem"
-sudo chown "$(id -u):$(id -g)" "${TARGET_DIR}/fullchain.pem" "${TARGET_DIR}/privkey.pem"
+# Keep production private keys in Certbot's host-managed directory. Point
+# TLS_CERTS_DIR at this path when starting docker-compose.prod.yml. Generated
+# certificates must never be copied into or committed from the repository.
+CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 
 echo "======================================================================"
 echo "✅ Cấp phát và cài đặt chứng chỉ SSL Let's Encrypt thành công!"
-echo "   Vị trí: ${TARGET_DIR}/fullchain.pem & privkey.pem"
+echo "   Vị trí host-managed: ${CERT_DIR}/fullchain.pem & privkey.pem"
+echo "   Khởi động: TLS_CERTS_DIR=${CERT_DIR} docker compose -f docker-compose.prod.yml up -d"
 echo ""
 echo "Hướng dẫn thiết lập tự động gia hạn (Cronjob):"
 echo "  0 3 * * 1 certbot renew --quiet --post-hook \"docker compose exec -T reverse-proxy nginx -s reload\""

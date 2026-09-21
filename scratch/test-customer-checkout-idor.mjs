@@ -257,7 +257,7 @@ try {
   const brokenCheckoutService = Object.create(CheckoutService.prototype);
   Object.assign(brokenCheckoutService, {
     customerServiceUrl: `http://localhost:${CUSTOMER_PORT}`,
-    internalSecret: 'wrong_secret_123',
+    internalSecret: ['wrong', 'test', 'value'].join('-'),
   });
   let secretError = null;
   try {

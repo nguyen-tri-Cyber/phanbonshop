@@ -46,6 +46,37 @@ export class OrdersService {
     @Optional() private readonly compensationService?: CompensationService,
   ) {}
 
+  async getInventoryDisposition(orderNumber: string): Promise<{
+    orderId: string;
+    orderNumber: string;
+    disposition: 'COMMIT' | 'RELEASE' | 'HOLD';
+  }> {
+    const order = await this.prisma.order.findUnique({
+      where: { orderNumber },
+      select: { id: true, orderNumber: true, status: true, paymentStatus: true },
+    });
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng: ${orderNumber}`);
+    }
+
+    let disposition: 'COMMIT' | 'RELEASE' | 'HOLD' = 'HOLD';
+    if (order.paymentStatus === PaymentStatus.PAID) {
+      disposition = 'COMMIT';
+    } else if (
+      order.status === OrderStatus.CANCELLED ||
+      new Set<PaymentStatus>([
+        PaymentStatus.FAILED,
+        PaymentStatus.CANCELLED,
+        PaymentStatus.EXPIRED,
+        PaymentStatus.REFUNDED,
+      ]).has(order.paymentStatus)
+    ) {
+      disposition = 'RELEASE';
+    }
+
+    return { orderId: order.id, orderNumber: order.orderNumber, disposition };
+  }
+
   /**
    * Sinh mã đơn hàng theo định dạng: DH-YYYYMMDD-XXXXXX
    * Không dùng sequential ID để bảo mật doanh số
@@ -655,4 +686,3 @@ export class OrdersService {
     };
   }
 }
-

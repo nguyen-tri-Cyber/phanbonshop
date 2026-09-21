@@ -28,6 +28,23 @@ env:
   CONTENT_DATABASE_URL: mysql://127.0.0.1:3306/content_db
 
 jobs:
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.30.1
+
   # ============================================================================
   # 1. Lint and Typecheck Job
   # ============================================================================
@@ -36,10 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: 'npm'
@@ -70,10 +87,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: 'npm'
@@ -87,6 +104,9 @@ jobs:
       - name: Build internal packages
         run: npm run build:packages
 
+      - name: Build services used by Node integration-style unit tests
+        run: npm run build
+
       - name: Run unit tests
         run: npm run test
 
@@ -98,10 +118,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: 'npm'
@@ -148,10 +168,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: 'npm'
@@ -162,10 +182,10 @@ jobs:
       - name: Initialize test databases in MySQL
         run: |
           mysql -h 127.0.0.1 -P 3306 -u root -pci_root_secret -e "
-            CREATE DATABASE IF NOT EXISTS auth_db;
+            CREATE DATABASE IF NOT EXISTS test_auth_db;
             CREATE DATABASE IF NOT EXISTS product_db;
-            CREATE DATABASE IF NOT EXISTS order_db;
-            CREATE DATABASE IF NOT EXISTS inventory_db;
+            CREATE DATABASE IF NOT EXISTS test_order_db;
+            CREATE DATABASE IF NOT EXISTS test_inventory_db;
             CREATE DATABASE IF NOT EXISTS customer_db;
             CREATE DATABASE IF NOT EXISTS content_db;
             GRANT ALL PRIVILEGES ON *.* TO 'ci_user'@'%';
@@ -174,10 +194,10 @@ jobs:
 
       - name: Deploy Prisma Migrations (Test idempotency & schema against fresh MySQL 8)
         env:
-          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_auth_db
           PRODUCT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
-          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
-          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_order_db
+          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_inventory_db
           CUSTOMER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
           CONTENT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
         run: |
@@ -190,10 +210,10 @@ jobs:
 
       - name: Verify second migration deploy run is cleanly idempotent
         env:
-          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/auth_db
+          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_auth_db
           PRODUCT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
-          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/order_db
-          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/inventory_db
+          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_order_db
+          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_inventory_db
           CUSTOMER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
           CONTENT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
         run: |
@@ -204,6 +224,27 @@ jobs:
           npx prisma migrate deploy --schema=services/customer-service/prisma/schema.prisma
           npx prisma migrate deploy --schema=services/content-service/prisma/schema.prisma
 
+      - name: Build packages and services before integration tests
+        run: npm run build
+
+      - name: Run real critical integration suites
+        env:
+          AUTH_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_auth_db
+          PRODUCT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/product_db
+          ORDER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_order_db
+          INVENTORY_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/test_inventory_db
+          CUSTOMER_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/customer_db
+          CONTENT_DATABASE_URL: mysql://ci_user:ci_secret_password@127.0.0.1:3306/content_db
+          MOMO_ENABLED: "true"
+          MOMO_PARTNER_CODE: ci-runtime-partner
+          MOMO_ACCESS_KEY: ci-runtime-access
+          MOMO_SECRET_KEY: ci-runtime-secret-generated-for-tests-only
+          MOMO_API_ENDPOINT: http://127.0.0.1:9/momo-create
+          MOMO_QUERY_ENDPOINT: http://127.0.0.1:9/momo-query
+          MOMO_REDIRECT_URL: http://localhost:3000/checkout/thanh-cong
+          MOMO_IPN_URL: http://localhost:3003/api/v1/payments/momo/ipn
+        run: npm run test:integration
+
   # ============================================================================
   # 5. Docker Build Test Job (Verify Dockerfiles & Compose)
   # ============================================================================
@@ -212,13 +253,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Validate docker-compose.prod.yml syntax
         env:
+          TLS_CERTS_DIR: ${{ runner.temp }}/phanbonshop-ci-certs
           MYSQL_ROOT_PASSWORD: ci_test_password
           MYSQL_USER: ci_test_user
           MYSQL_PASSWORD: ci_test_password
@@ -230,13 +272,21 @@ jobs:
           JWT_REFRESH_SECRET: ci_test_jwt_refresh_secret_token_32_chars_long
           INTERNAL_SERVICE_SECRET: ci_test_internal_secret
           CORS_ALLOWED_ORIGINS: http://localhost:3000
-        run: docker compose -f docker-compose.prod.yml config
+        run: |
+          mkdir -p "$TLS_CERTS_DIR"
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout "$TLS_CERTS_DIR/privkey.pem" \
+            -out "$TLS_CERTS_DIR/fullchain.pem" \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          docker compose -f docker-compose.prod.yml config
 
       - name: Validate Nginx configuration syntax
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro \
             -v ${{ github.workspace }}/docker/nginx/conf.d:/etc/nginx/conf.d:ro \
+            -v ${{ runner.temp }}/phanbonshop-ci-certs:/etc/nginx/certs:ro \
             nginx:1.27-alpine nginx -t
 
       - name: Test Build Frontend Dockerfile
@@ -262,3 +312,61 @@ jobs:
           file: services/auth-service/Dockerfile
           push: false
           tags: phanbonshop-auth:ci-test
+
+  production-smoke:
+    name: Production-like Compose Boot
+    runs-on: ubuntu-latest
+    env:
+      MYSQL_ROOT_PASSWORD: ci-prod-root-password-not-for-production
+      MYSQL_USER: ci_prod_user
+      MYSQL_PASSWORD: ci-prod-database-password-not-for-production
+      REDIS_PASSWORD: ci-prod-redis-password-not-for-production
+      MINIO_ROOT_USER: ci_prod_minio
+      MINIO_ROOT_PASSWORD: ci-prod-minio-password-not-for-production
+      JWT_ACCESS_SECRET: ci-prod-access-secret-at-least-32-characters
+      JWT_REFRESH_SECRET: ci-prod-refresh-secret-at-least-32-characters
+      INTERNAL_SERVICE_SECRET: test-only-not-a-secret
+      BANK_NAME: CI Test Bank
+      BANK_CODE: CITEST
+      BANK_ACCOUNT_NUMBER: "0000000000"
+      BANK_ACCOUNT_HOLDER: CI TEST ACCOUNT
+      BANK_BRANCH: CI
+      CORS_ALLOWED_ORIGINS: https://localhost
+      MOMO_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Generate ephemeral CI certificate
+        run: |
+          TLS_CERTS_DIR="${{ runner.temp }}/phanbonshop-smoke-certs"
+          mkdir -p "$TLS_CERTS_DIR"
+          openssl req -x509 -nodes -days 1 -newkey rsa:2048 \
+            -keyout "$TLS_CERTS_DIR/privkey.pem" \
+            -out "$TLS_CERTS_DIR/fullchain.pem" \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          echo "TLS_CERTS_DIR=$TLS_CERTS_DIR" >> "$GITHUB_ENV"
+
+      - name: Build production compose stack
+        run: docker compose -f docker-compose.prod.yml build
+
+      - name: Boot and verify health/readiness
+        run: |
+          docker compose -f docker-compose.prod.yml up -d
+          for attempt in $(seq 1 36); do
+            if curl --insecure --fail --silent https://127.0.0.1/healthz >/dev/null \
+              && docker compose -f docker-compose.prod.yml exec -T gateway node -e "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+              && docker compose -f docker-compose.prod.yml exec -T frontend node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.prod.yml logs --no-color
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose -f docker-compose.prod.yml down -v

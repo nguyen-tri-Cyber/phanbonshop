@@ -22,6 +22,7 @@ import {
   Prisma,
 } from '../../generated/client/index.js';
 import { createLogger } from '@phanbonshop/logger';
+import { CANONICAL_PORTS, getEnvString, getServiceUrl } from '@phanbonshop/config';
 
 const logger = createLogger('inventory-service');
 
@@ -48,8 +49,40 @@ interface RawInventoryRow {
 @Injectable()
 export class InventoryService implements OnModuleInit, OnModuleDestroy {
   private cleanupTimer: NodeJS.Timeout | null = null;
+  private cleanupRunning = false;
+  private readonly orderServiceUrl = getServiceUrl(
+    'ORDER_SERVICE_URL',
+    CANONICAL_PORTS.ORDER_SERVICE,
+  );
+  private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
+  private readonly paymentGraceMs =
+    Number(process.env.RESERVATION_PAYMENT_GRACE_MS) || 15 * 60 * 1000;
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private assertInventoryInvariant(
+    inv: RawInventoryRow,
+    context: { operation: string; reservationId: string; quantity: number },
+  ): void {
+    const invalidBaseState =
+      inv.stockQuantity < 0 ||
+      inv.reservedQuantity < 0 ||
+      inv.reservedQuantity > inv.stockQuantity;
+    const insufficientReservation = inv.reservedQuantity < context.quantity;
+    const insufficientStock =
+      context.operation === 'COMMIT' && inv.stockQuantity < context.quantity;
+    if (!invalidBaseState && !insufficientReservation && !insufficientStock) return;
+
+    logger.error('RESERVATION_INVARIANT_VIOLATION', undefined, {
+      ...context,
+      variantId: inv.variantId,
+      stockQuantity: inv.stockQuantity,
+      reservedQuantity: inv.reservedQuantity,
+    });
+    throw new ConflictException(
+      `RESERVATION_INVARIANT_VIOLATION: bất biến tồn kho không hợp lệ cho ${context.reservationId}`,
+    );
+  }
 
   async onModuleInit() {
     // 1. Quét dọn ngay các reservation hết hạn lúc khởi động
@@ -62,10 +95,14 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
     // 2. Kích hoạt worker chạy định kỳ (mặc định 60 giây)
     const intervalMs = Number(process.env.RESERVATION_CLEANUP_INTERVAL_MS) || 60_000;
     this.cleanupTimer = setInterval(async () => {
+      if (this.cleanupRunning) return;
+      this.cleanupRunning = true;
       try {
         await this.releaseExpiredReservations();
       } catch (err) {
         logger.error('Lỗi khi worker quét dọn reservation hết hạn định kỳ:', err);
+      } finally {
+        this.cleanupRunning = false;
       }
     }, intervalMs);
 
@@ -266,7 +303,12 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException(`Không tìm thấy tồn kho cho variant: ${reservation.variantId}`);
       }
 
-      const newReserved = Math.max(0, inv.reservedQuantity - reservation.quantity);
+      this.assertInventoryInvariant(inv, {
+        operation: 'RELEASE',
+        reservationId: reservation.reservationId,
+        quantity: reservation.quantity,
+      });
+      const newReserved = inv.reservedQuantity - reservation.quantity;
 
       await tx.inventory.update({
         where: { variantId: reservation.variantId },
@@ -387,7 +429,12 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException(`Không tìm thấy tồn kho cho variant: ${reservation.variantId}`);
       }
 
-      const newReserved = Math.max(0, inv.reservedQuantity - reservation.quantity);
+      this.assertInventoryInvariant(inv, {
+        operation: 'ROLLBACK_RELEASE',
+        reservationId: reservation.reservationId,
+        quantity: reservation.quantity,
+      });
+      const newReserved = inv.reservedQuantity - reservation.quantity;
 
       await tx.inventory.update({
         where: { variantId: reservation.variantId },
@@ -557,8 +604,13 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
         throw new NotFoundException(`Không tìm thấy tồn kho cho variant: ${reservation.variantId}`);
       }
 
-      const newStock = Math.max(0, inv.stockQuantity - reservation.quantity);
-      const newReserved = Math.max(0, inv.reservedQuantity - reservation.quantity);
+      this.assertInventoryInvariant(inv, {
+        operation: 'COMMIT',
+        reservationId: reservation.reservationId,
+        quantity: reservation.quantity,
+      });
+      const newStock = inv.stockQuantity - reservation.quantity;
+      const newReserved = inv.reservedQuantity - reservation.quantity;
 
       await tx.inventory.update({
         where: { variantId: reservation.variantId },
@@ -769,6 +821,39 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
   }
 
   // --- 6. GIẢI PHÓNG CÁC RESERVATION HẾT HẠN (EXPIRED RESERVATION CLEANUP) - MULTI-REPLICA SAFE ---
+  async getOrderInventoryDisposition(
+    orderNumber: string,
+  ): Promise<'COMMIT' | 'RELEASE' | 'HOLD' | 'UNKNOWN'> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(
+        `${this.orderServiceUrl}/internal/v1/orders/inventory-disposition/${encodeURIComponent(orderNumber)}`,
+        {
+          headers: {
+            'X-Internal-Secret': this.internalSecret,
+            'X-Request-Id': `expiry-${orderNumber}`,
+          },
+          signal: controller.signal,
+        },
+      );
+      if (!response.ok) return 'UNKNOWN';
+      const result = (await response.json()) as { disposition?: string };
+      if (['COMMIT', 'RELEASE', 'HOLD'].includes(result.disposition || '')) {
+        return result.disposition as 'COMMIT' | 'RELEASE' | 'HOLD';
+      }
+      return 'UNKNOWN';
+    } catch (err) {
+      logger.warn('Không thể xác minh trạng thái thanh toán trước khi expiry', {
+        orderNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return 'UNKNOWN';
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async releaseExpiredReservations(): Promise<{ releasedCount: number }> {
     const expiredReservations = await this.prisma.inventoryReservation.findMany({
       where: {
@@ -782,6 +867,26 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
     let count = 0;
     for (const res of expiredReservations) {
       try {
+        if (res.referenceType === 'ORDER' && res.referenceId) {
+          const disposition = await this.getOrderInventoryDisposition(res.referenceId);
+          if (disposition === 'COMMIT') {
+            await this.commit(
+              { reservationId: res.reservationId, referenceId: res.referenceId },
+              `expiry-commit-${res.id}`,
+            );
+            continue;
+          }
+          if (disposition === 'UNKNOWN') {
+            continue;
+          }
+          if (
+            disposition === 'HOLD' &&
+            Date.now() < res.expiresAt.getTime() + this.paymentGraceMs
+          ) {
+            continue;
+          }
+        }
+
         await this.prisma.$transaction(async (tx) => {
           // 1. Atomic Claim: Chỉ worker nào cập nhật thành công ACTIVE -> EXPIRED mới được xử lý tiếp
           const claim = await tx.inventoryReservation.updateMany({
@@ -809,7 +914,12 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
 
           const inv = rows[0];
           if (inv) {
-            const newReserved = Math.max(0, inv.reservedQuantity - res.quantity);
+            this.assertInventoryInvariant(inv, {
+              operation: 'EXPIRY_RELEASE',
+              reservationId: res.reservationId,
+              quantity: res.quantity,
+            });
+            const newReserved = inv.reservedQuantity - res.quantity;
 
             await tx.inventory.update({
               where: { variantId: res.variantId },

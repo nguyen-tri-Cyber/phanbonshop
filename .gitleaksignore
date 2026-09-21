@@ -1,0 +1,11 @@
+# Legacy findings already committed before the production-hardening pass.
+# These are exact fingerprints for test fixtures and the removed localhost-only
+# self-signed key. New findings remain blocking.
+7fc6879af48b94d7b42537d50f6487a5ec7e3749:services/order-service/test/momo.sandbox.test.mjs:generic-api-key:77
+7fc6879af48b94d7b42537d50f6487a5ec7e3749:services/order-service/test/momo.sandbox.test.mjs:generic-api-key:96
+5a8a9856c8bb544740c3e7683e4a1a5f2fdd573e:docker/nginx/certs/privkey.pem:private-key:1
+b4ba3b35a28b386a1e271f2bb23b5a2256386e15:services/auth-service/test/auth.unit.test.mjs:generic-api-key:35
+bf42411e5dba58997b389d324005eec29d215ff9:scratch/test-customer-checkout-idor.mjs:generic-api-key:260
+bf42411e5dba58997b389d324005eec29d215ff9:scratch/test-secret-management-regression.mjs:generic-api-key:178
+f4a6ca00a7454461cec54405e0974ebdb50d8782:test-payloads/logout.json:jwt:2
+f4a6ca00a7454461cec54405e0974ebdb50d8782:test-payloads/refresh.json:jwt:2

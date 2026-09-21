@@ -13,6 +13,17 @@ import { BankTransferPaymentProvider } from '../dist/payments/providers/bank-tra
 import { MomoPaymentProvider } from '../dist/payments/providers/momo-payment.provider.js';
 import { PaymentsService } from '../dist/payments/payments.service.js';
 
+process.env.NODE_ENV = 'test';
+process.env.MOMO_ENABLED = 'true';
+process.env.MOMO_PARTNER_CODE = 'runtime-test-partner';
+process.env.MOMO_ACCESS_KEY = 'runtime-test-access';
+process.env.MOMO_SECRET_KEY = crypto.randomBytes(32).toString('hex');
+process.env.MOMO_API_ENDPOINT = 'http://127.0.0.1:9/momo-create';
+process.env.MOMO_QUERY_ENDPOINT = 'http://127.0.0.1:9/momo-query';
+process.env.MOMO_REDIRECT_URL = 'http://localhost:3000/checkout/thanh-cong';
+process.env.MOMO_IPN_URL = 'http://localhost:3003/api/v1/payments/momo/ipn';
+process.env.INTERNAL_SERVICE_SECRET ||= 'integration-test-internal-service-secret';
+
 // Khởi tạo Prisma Client kết nối database test_order_db (MySQL port 3307)
 const prisma = new PrismaClient({
   datasources: {
@@ -74,9 +85,8 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
   // ============================================================================
   describe('8.1: MoMo HMAC-SHA256 Signature Specification & Verification', () => {
     test('Tạo chữ ký HMAC-SHA256 chính xác theo quy chuẩn MoMo Gateway', () => {
-      const secretKey = 'at67qH6mk8w5Y1nAyMoYKMWACiEi2Aca';
-      const rawData =
-        'accessKey=klm05TvNBzhg7h7j&amount=50000&extraData=&ipnUrl=http://localhost:3003/api/v1/payments/momo/ipn&orderId=DH-TEST-001&orderInfo=Thanh toan don hang DH-TEST-001&partnerCode=MOMOBKUN20180529&redirectUrl=http://localhost:3000/checkout/thanh-cong&requestId=DH-TEST-001_123456&requestType=captureWallet';
+      const secretKey = process.env.MOMO_SECRET_KEY;
+      const rawData = `accessKey=${process.env.MOMO_ACCESS_KEY}&amount=50000&extraData=&ipnUrl=${process.env.MOMO_IPN_URL}&orderId=DH-TEST-001&orderInfo=Thanh toan don hang DH-TEST-001&partnerCode=${process.env.MOMO_PARTNER_CODE}&redirectUrl=${process.env.MOMO_REDIRECT_URL}&requestId=DH-TEST-001_123456&requestType=captureWallet`;
 
       const expectedSignature = crypto
         .createHmac('sha256', secretKey)
@@ -93,9 +103,8 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
     });
 
     test('Bất kỳ sự thay đổi nào trên payload đều làm sai lệch chữ ký (Tamper Proof)', () => {
-      const secretKey = 'at67qH6mk8w5Y1nAyMoYKMWACiEi2Aca';
-      const rawData =
-        'accessKey=klm05TvNBzhg7h7j&amount=50000&extraData=&ipnUrl=http://localhost:3003/api/v1/payments/momo/ipn&orderId=DH-TEST-001&orderInfo=Thanh toan don hang DH-TEST-001&partnerCode=MOMOBKUN20180529&redirectUrl=http://localhost:3000/checkout/thanh-cong&requestId=DH-TEST-001_123456&requestType=captureWallet';
+      const secretKey = process.env.MOMO_SECRET_KEY;
+      const rawData = `accessKey=${process.env.MOMO_ACCESS_KEY}&amount=50000&extraData=&ipnUrl=${process.env.MOMO_IPN_URL}&orderId=DH-TEST-001&orderInfo=Thanh toan don hang DH-TEST-001&partnerCode=${process.env.MOMO_PARTNER_CODE}&redirectUrl=${process.env.MOMO_REDIRECT_URL}&requestId=DH-TEST-001_123456&requestType=captureWallet`;
       const tamperedData = rawData.replace('amount=50000', 'amount=500000');
 
       const originalSignature = MomoPaymentProvider.generateSignature(
@@ -292,7 +301,7 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
       // 3. Giả lập MoMo gửi IPN Webhook thanh toán thành công
       const config = momoProvider.getConfig();
       const transId = `MOMO_TX_${Date.now()}`;
-      const requestId = `${orderNumber}_${Date.now()}`;
+      const requestId = initResult.paymentTransaction.providerRequestId;
       const responseTime = Date.now();
       const resultCode = 0;
       const message = 'Giao dịch MoMo thành công.';
@@ -351,7 +360,7 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
         orderBy: { createdAt: 'desc' },
       });
 
-      assert.equal(transactions.length, 2); // 1 PENDING ban đầu + 1 SUCCESS từ Webhook
+      assert.equal(transactions.length, 1); // attempt hiện hữu được transition atomically
       assert.equal(transactions[0].status, PaymentTransactionStatus.SUCCESS);
       assert.equal(transactions[0].provider, 'MOMO');
       assert.equal(transactions[0].transactionId, transId);
@@ -377,7 +386,7 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
       });
       testOrderIds.push(order.id);
 
-      await paymentsService.createPaymentRecord(
+      const initResult = await paymentsService.createPaymentRecord(
         {
           orderId: order.id,
           orderNumber: order.orderNumber,
@@ -390,7 +399,7 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
       // 2. Tạo IPN payload
       const config = momoProvider.getConfig();
       const transId = `MOMO_TX_IDEM_${Date.now()}`;
-      const requestId = `${orderNumber}_req`;
+      const requestId = initResult.paymentTransaction.providerRequestId;
       const responseTime = Date.now();
       const resultCode = 0;
       const message = 'Thành công';
@@ -434,7 +443,7 @@ describe('Phase 8 — MoMo Sandbox Integration Tests', () => {
       const transactions = await prisma.paymentTransaction.findMany({
         where: { orderId: order.id },
       });
-      assert.equal(transactions.length, 2); // 1 PENDING ban đầu + 1 SUCCESS từ lần gọi 1
+      assert.equal(transactions.length, 1); // attempt hiện hữu chỉ transition đúng một lần
     });
   });
 });

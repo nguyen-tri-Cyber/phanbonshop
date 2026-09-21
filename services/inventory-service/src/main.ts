@@ -13,6 +13,7 @@ async function bootstrap(): Promise<void> {
   validateStartupEnv('inventory-service', {
     requiredVars: ['JWT_ACCESS_SECRET', 'INTERNAL_SERVICE_SECRET'],
     requiredDatabaseUrl: 'INVENTORY_DATABASE_URL',
+    requiredServiceUrls: ['ORDER_SERVICE_URL'],
   });
 
   const app = await NestFactory.create(AppModule, {
@@ -30,6 +31,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  if (process.env.NODE_ENV !== 'production') {
   const config = new DocumentBuilder()
     .setTitle('Phan Bon Shop - Inventory Service')
     .setDescription('Microservice quản lý tồn kho, tạm giữ và chống oversell với giao dịch bi quan MySQL')
@@ -39,6 +41,7 @@ async function bootstrap(): Promise<void> {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
+  }
 
   const port = Number(process.env.INVENTORY_SERVICE_PORT) || CANONICAL_PORTS.INVENTORY_SERVICE;
   await app.listen(port, '0.0.0.0');
@@ -46,7 +49,7 @@ async function bootstrap(): Promise<void> {
   logger.info(`Inventory Service đã khởi động thành công trên cổng ${port}`, {
     port,
     database: 'inventory_db',
-    swagger: `http://localhost:${port}/docs`,
+    swagger: process.env.NODE_ENV === 'production' ? 'disabled' : `http://localhost:${port}/docs`,
   });
 }
 

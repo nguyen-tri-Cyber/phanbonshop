@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -10,6 +11,7 @@ const rootDir = path.resolve(__dirname, '..');
 
 describe('Production Hardening & SSL Verification Tests (TASK-P6-01 / AUD-P1-002)', () => {
   const nginxConfPath = path.resolve(rootDir, 'docker/nginx/conf.d/default.conf');
+  const localNginxConfPath = path.resolve(rootDir, 'docker/nginx/conf.d.local/default.conf');
   const certsDir = path.resolve(rootDir, 'docker/nginx/certs');
   const scriptsDir = path.resolve(rootDir, 'scripts');
 
@@ -30,18 +32,63 @@ describe('Production Hardening & SSL Verification Tests (TASK-P6-01 / AUD-P1-002
     assert.ok(conf.includes('Strict-Transport-Security'), 'Must include HSTS header');
   });
 
-  test('Fallback SSL certificate and private key files exist and are valid PEM', () => {
+  test('local compose serves plain HTTP without redirecting or emitting HSTS', () => {
+    const compose = fs.readFileSync(path.resolve(rootDir, 'docker-compose.yml'), 'utf8');
+    const conf = fs.readFileSync(localNginxConfPath, 'utf8');
+    const gatewayMain = fs.readFileSync(
+      path.resolve(rootDir, 'apps/api-gateway/src/main.ts'),
+      'utf8',
+    );
+
+    assert.ok(compose.includes('./docker/nginx/conf.d.local:/etc/nginx/conf.d:ro'));
+    assert.match(compose, /-\s*"?80:80"?/);
+    assert.ok(!compose.includes('443:443'));
+    assert.ok(conf.includes('listen 80;'));
+    assert.ok(!conf.includes('return 301 https://'));
+    assert.ok(!conf.includes('Strict-Transport-Security'));
+    assert.ok(
+      gatewayMain.includes(
+        "strictTransportSecurity: process.env.NODE_ENV === 'production'",
+      ),
+      'API Gateway must emit HSTS only in production',
+    );
+  });
+
+  test('TLS key material is generated at runtime and never tracked in the repository', () => {
     const fullchain = path.join(certsDir, 'fullchain.pem');
     const privkey = path.join(certsDir, 'privkey.pem');
+    const trackedCerts = execFileSync(
+      'git',
+      ['ls-files', '--', 'docker/nginx/certs/*.pem', 'docker/nginx/certs/*.key'],
+      { cwd: rootDir, encoding: 'utf8' },
+    ).trim().split(/\r?\n/).filter(Boolean);
 
-    assert.ok(fs.existsSync(fullchain), 'fullchain.pem must exist');
-    assert.ok(fs.existsSync(privkey), 'privkey.pem must exist');
+    assert.deepEqual(
+      trackedCerts.filter((relativePath) => fs.existsSync(path.resolve(rootDir, relativePath))),
+      [],
+      'No tracked TLS key/certificate material may remain in the working tree',
+    );
 
-    const certContent = fs.readFileSync(fullchain, 'utf8');
-    const keyContent = fs.readFileSync(privkey, 'utf8');
+    const gitignore = fs.readFileSync(path.resolve(rootDir, '.gitignore'), 'utf8');
+    assert.match(gitignore, /docker\/nginx\/certs\/\*\.pem/);
+    assert.match(gitignore, /docker\/nginx\/certs\/\*\.key/);
 
-    assert.ok(certContent.includes('-----BEGIN CERTIFICATE-----'), 'Certificate must have valid PEM header');
-    assert.ok(keyContent.includes('-----BEGIN PRIVATE KEY-----'), 'Private key must have valid PEM header');
+    if (fs.existsSync(fullchain) || fs.existsSync(privkey)) {
+      assert.equal(
+        execFileSync('git', ['check-ignore', 'docker/nginx/certs/fullchain.pem'], {
+          cwd: rootDir,
+          encoding: 'utf8',
+        }).trim(),
+        'docker/nginx/certs/fullchain.pem',
+      );
+      assert.equal(
+        execFileSync('git', ['check-ignore', 'docker/nginx/certs/privkey.pem'], {
+          cwd: rootDir,
+          encoding: 'utf8',
+        }).trim(),
+        'docker/nginx/certs/privkey.pem',
+      );
+    }
   });
 
   test('SSL provisioning scripts exist with correct entrypoints', () => {
@@ -56,6 +103,14 @@ describe('Production Hardening & SSL Verification Tests (TASK-P6-01 / AUD-P1-002
     const letsencryptContent = fs.readFileSync(letsencryptSh, 'utf8');
     assert.ok(letsencryptContent.includes('certbot'));
     assert.ok(letsencryptContent.includes('phanbonshop.vn'));
+    assert.ok(
+      !letsencryptContent.includes('./docker/nginx/certs'),
+      'Production certificate setup must not copy private keys into the repository',
+    );
+
+    const compose = fs.readFileSync(path.resolve(rootDir, 'docker-compose.prod.yml'), 'utf8');
+    assert.match(compose, /\$\{TLS_CERTS_DIR:\?/);
+    assert.ok(!compose.includes('./docker/nginx/certs:/etc/nginx/certs:ro'));
   });
 
   test('.env.production.example exists and contains security warnings', () => {

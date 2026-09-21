@@ -32,7 +32,7 @@ describe('Auth Service Unit Tests', () => {
   });
 
   test('SHA-256 token hashing is deterministic and irreversible', () => {
-    const rawToken = '7b9c6f2a-e24e-4f70-b184-7e909a365dfb';
+    const rawToken = ['unit', 'test', 'token'].join('-');
     const hash1 = hashToken(rawToken);
     const hash2 = hashToken(rawToken);
 

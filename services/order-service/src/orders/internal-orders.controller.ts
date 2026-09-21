@@ -42,6 +42,14 @@ export class InternalOrdersController {
     return this.ordersService.getCustomerOrderSummary(customerId);
   }
 
+  @Get('inventory-disposition/:orderNumber')
+  @ApiOperation({
+    summary: '[Internal] Quyết định commit/release/hold reservation theo trạng thái thanh toán',
+  })
+  async getInventoryDisposition(@Param('orderNumber') orderNumber: string) {
+    return this.ordersService.getInventoryDisposition(orderNumber);
+  }
+
   @Get('compensation-tasks')
   @ApiOperation({
     summary: '[Internal] Giám sát danh sách Compensation Tasks (PENDING / PROCESSING / COMPLETED / FAILED)',

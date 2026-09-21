@@ -816,7 +816,11 @@ export class CheckoutService {
    */
   private async fetchProductCatalog(productId: string): Promise<CatalogProduct | null> {
     try {
-      const res = await fetch(`${this.productServiceUrl}/api/v1/products/${productId}`);
+      const requestId = `catalog-${crypto.randomUUID()}`;
+      const res = await fetch(`${this.productServiceUrl}/api/v1/products/${productId}`, {
+        headers: { 'X-Request-Id': requestId },
+        signal: AbortSignal.timeout(5000),
+      });
       if (!res.ok) {
         return null;
       }
@@ -842,7 +846,9 @@ export class CheckoutService {
         {
           headers: {
             'x-internal-secret': this.internalSecret,
+            'x-request-id': `address-${crypto.randomUUID()}`,
           },
+          signal: AbortSignal.timeout(5000),
         },
       );
     } catch (err) {
@@ -908,6 +914,7 @@ export class CheckoutService {
           ...(requestId ? { 'X-Request-Id': requestId } : {}),
         },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5000),
       });
 
       return res.ok;

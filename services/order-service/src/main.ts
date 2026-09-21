@@ -35,6 +35,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  if (process.env.NODE_ENV !== 'production') {
   const config = new DocumentBuilder()
     .setTitle('Phan Bon Shop - Order & Cart Service')
     .setDescription('Microservice quản lý giỏ hàng, gộp giỏ hàng và xử lý đơn hàng phân bón')
@@ -43,6 +44,7 @@ async function bootstrap(): Promise<void> {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
+  }
 
   const port = Number(process.env.ORDER_SERVICE_PORT) || CANONICAL_PORTS.ORDER_SERVICE;
   await app.listen(port, '0.0.0.0');
@@ -50,7 +52,7 @@ async function bootstrap(): Promise<void> {
   logger.info(`Order & Cart Service đã khởi động thành công trên cổng ${port}`, {
     port,
     database: 'order_db',
-    swagger: `http://localhost:${port}/docs`,
+    swagger: process.env.NODE_ENV === 'production' ? 'disabled' : `http://localhost:${port}/docs`,
   });
 }
 

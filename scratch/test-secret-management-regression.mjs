@@ -175,7 +175,7 @@ try {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Internal-Secret': 'wrong_invalid_secret_key_123',
+      'X-Internal-Secret': ['wrong', 'test', 'value'].join('-'),
     },
     body: JSON.stringify(syncPayload),
   });

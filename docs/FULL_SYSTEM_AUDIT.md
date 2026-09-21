@@ -1,4 +1,8 @@
 # PHANBONSHOP — BÁO CÁO TOÀN DIỆN KỸ THUẬT HỆ THỐNG (FULL SYSTEM TECHNICAL AUDIT)
+
+> **Lưu ý trạng thái:** Đây là audit nền trước remediation. Quyết định phát hành mới nhất nằm tại
+> [`PRODUCTION_READINESS_REPORT.md`](./PRODUCTION_READINESS_REPORT.md); không dùng các kết luận lịch sử
+> trong tài liệu này để suy ra hệ thống đã sẵn sàng production.
 *(Bản hiệu chỉnh toàn diện theo nguyên tắc Source Code là nguồn sự thật duy nhất)*
 
 > **Ngày thực hiện kiểm toán:** 20/09/2026  

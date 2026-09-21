@@ -2,10 +2,12 @@
 # PhanBonShop — Generate Self-Signed SSL Certificates (PowerShell for Windows)
 # ==============================================================================
 param (
-    [string]$CertDir = "./docker/nginx/certs"
+    [string]$CertDir = "./.local/certs"
 )
 
 $ErrorActionPreference = "Stop"
+
+# Generated certificates must never be committed.
 
 if (-not (Test-Path $CertDir)) {
     New-Item -ItemType Directory -Path $CertDir -Force | Out-Null

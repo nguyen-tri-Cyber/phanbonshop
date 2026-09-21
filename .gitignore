@@ -29,6 +29,11 @@ yarn-error.log*
 *.tsbuildinfo
 coverage/
 
+# TLS certificates are generated/provisioned at runtime and must never be committed
+docker/nginx/certs/*.pem
+docker/nginx/certs/*.key
+.local/
+
 # IDE / OS / Tooling
 .vscode/
 .idea/

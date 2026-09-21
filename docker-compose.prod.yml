@@ -7,12 +7,12 @@ services:
     container_name: phanbonshop_proxy_prod
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./docker/nginx/certs:/etc/nginx/certs:ro
+      - ${TLS_CERTS_DIR:?TLS_CERTS_DIR must point to an external certificate directory}:/etc/nginx/certs:ro
     depends_on:
       frontend:
         condition: service_healthy
@@ -111,7 +111,27 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 4. Auth Service (NestJS + Prisma)
+  # 4. Database migrations (one-shot, fail closed)
+  # ==========================================
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.migrate
+    container_name: phanbonshop_migrate_prod
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_USER: ${MYSQL_USER:-phanbon_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+    networks:
+      - internal_network
+
+  # ==========================================
+  # 5. Auth Service (NestJS + Prisma)
   # ==========================================
   auth:
     build:
@@ -128,7 +148,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/auth_db
+      AUTH_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/auth_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
@@ -136,8 +156,8 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -150,7 +170,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 5. Product Service (NestJS + Prisma)
+  # 6. Product Service (NestJS + Prisma)
   # ==========================================
   product:
     build:
@@ -167,15 +187,21 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3002
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/product_db
+      PRODUCT_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/product_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      ORDER_SERVICE_URL: http://order:3003
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET_PRODUCTS: ${MINIO_BUCKET_PRODUCTS:-product-images}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -188,7 +214,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 6. Order Service (NestJS + Prisma)
+  # 7. Order Service (NestJS + Prisma)
   # ==========================================
   order:
     build:
@@ -205,17 +231,32 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3003
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/order_db
+      ORDER_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/order_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      VIETQR_WEBHOOK_SECRET: ${VIETQR_WEBHOOK_SECRET:-}
+      BANK_NAME: ${BANK_NAME:?BANK_NAME is required}
+      BANK_CODE: ${BANK_CODE:?BANK_CODE is required}
+      BANK_ACCOUNT_NUMBER: ${BANK_ACCOUNT_NUMBER:?BANK_ACCOUNT_NUMBER is required}
+      BANK_ACCOUNT_HOLDER: ${BANK_ACCOUNT_HOLDER:?BANK_ACCOUNT_HOLDER is required}
+      BANK_BRANCH: ${BANK_BRANCH:-}
+      PRODUCT_SERVICE_URL: http://product:3002
       INVENTORY_SERVICE_URL: http://inventory:3004
       CUSTOMER_SERVICE_URL: http://customer:3005
+      MOMO_ENABLED: ${MOMO_ENABLED:-false}
+      MOMO_PARTNER_CODE: ${MOMO_PARTNER_CODE:-}
+      MOMO_ACCESS_KEY: ${MOMO_ACCESS_KEY:-}
+      MOMO_SECRET_KEY: ${MOMO_SECRET_KEY:-}
+      MOMO_API_ENDPOINT: ${MOMO_API_ENDPOINT:-}
+      MOMO_QUERY_ENDPOINT: ${MOMO_QUERY_ENDPOINT:-}
+      MOMO_REDIRECT_URL: ${MOMO_REDIRECT_URL:-}
+      MOMO_IPN_URL: ${MOMO_IPN_URL:-}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       inventory:
@@ -232,7 +273,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 7. Inventory Service (NestJS + Prisma)
+  # 8. Inventory Service (NestJS + Prisma)
   # ==========================================
   inventory:
     build:
@@ -249,15 +290,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3004
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/inventory_db
+      INVENTORY_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/inventory_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      ORDER_SERVICE_URL: http://order:3003
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -270,7 +312,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 8. Customer Service (NestJS + Prisma)
+  # 9. Customer Service (NestJS + Prisma)
   # ==========================================
   customer:
     build:
@@ -287,15 +329,16 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3005
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/customer_db
+      CUSTOMER_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/customer_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      ORDER_SERVICE_URL: http://order:3003
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
@@ -308,7 +351,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 9. Content Service (NestJS + Prisma + MinIO)
+  # 10. Content Service (NestJS + Prisma + MinIO)
   # ==========================================
   content:
     build:
@@ -325,7 +368,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3006
-      DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/content_db
+      CONTENT_DATABASE_URL: mysql://${MYSQL_USER:-phanbon_user}:${MYSQL_PASSWORD}@mysql:3306/content_db
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
       REDIS_HOST: redis
@@ -333,12 +376,13 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
-      CORS_ORIGIN: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET_CONTENT: ${MINIO_BUCKET_CONTENT:-content-images}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
     depends_on:
-      mysql:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       minio:
@@ -353,7 +397,7 @@ services:
       start_period: 15s
 
   # ==========================================
-  # 10. Database: MySQL 8.0 (Internal Only)
+  # 11. Database: MySQL 8.0 (Internal Only)
   # ==========================================
   mysql:
     image: mysql:8.0
@@ -371,7 +415,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
       TZ: Asia/Ho_Chi_Minh
     volumes:
-      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./docker/mysql/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
       - mysql_prod_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
@@ -383,7 +427,7 @@ services:
       - internal_network
 
   # ==========================================
-  # 11. Cache & Locks: Redis 7 (Internal Only)
+  # 12. Cache & Locks: Redis 7 (Internal Only)
   # ==========================================
   redis:
     image: redis:7-alpine
@@ -407,7 +451,7 @@ services:
       - internal_network
 
   # ==========================================
-  # 12. Storage: MinIO (Internal Only)
+  # 13. Storage: MinIO (Internal Only)
   # ==========================================
   minio:
     image: quay.io/minio/minio:latest

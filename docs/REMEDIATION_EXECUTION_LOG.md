@@ -1,5 +1,8 @@
 # PHANBONSHOP — NHẬT KÝ THỰC THI KHẮC PHỤC HỆ THỐNG (REMEDIATION EXECUTION LOG)
 
+> **Lưu ý trạng thái:** Nhật ký này ghi lại các phase lịch sử. Verdict và kết quả gate mới nhất nằm tại
+> [`PRODUCTION_READINESS_REPORT.md`](./PRODUCTION_READINESS_REPORT.md).
+
 > **Mục tiêu:** Ghi chép minh bạch, chính xác từng bước kiểm tra, tái hiện lỗi, kiểm thử và khắc phục của từng Phase theo đúng cam kết không làm tắt, không hallucinate, và có bằng chứng cụ thể.
 
 ---
@@ -765,4 +768,3 @@
        - Tổng cộng kiểm thử tích hợp: **34/34 PASS** trên các database MySQL phân tán.
      - **Gate 5 (Production Build):** `npm run build` -> **12/12 workspaces build thành công 100%**, Next.js frontend biên dịch hoàn chỉnh 29 routes tĩnh và động.
 - **Status:** PASS
-

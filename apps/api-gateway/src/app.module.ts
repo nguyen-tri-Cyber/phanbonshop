@@ -22,7 +22,7 @@ import { InternalGuardMiddleware } from './common/middleware/internal-guard.midd
       },
     ]),
     HealthModule,
-    TestModule,
+    ...(process.env.NODE_ENV === 'production' ? [] : [TestModule]),
     AuthProxyModule,
     ProductProxyModule,
     InventoryProxyModule,

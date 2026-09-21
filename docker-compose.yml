@@ -26,7 +26,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-phanbon_secret}
       TZ: Asia/Ho_Chi_Minh
     volumes:
-      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./docker/mysql/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
       - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_secret}"]
@@ -241,6 +241,12 @@ services:
       JWT_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your_jwt_access_secret_key_phanbonshop_32chars_min}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:-your_internal_service_mesh_shared_secret_2026}
+      VIETQR_WEBHOOK_SECRET: ${VIETQR_WEBHOOK_SECRET:-}
+      BANK_NAME: ${BANK_NAME:-Ngân Hàng TMCP Ngoại Thương Việt Nam (Vietcombank)}
+      BANK_CODE: ${BANK_CODE:-VCB}
+      BANK_ACCOUNT_NUMBER: ${BANK_ACCOUNT_NUMBER:-0123456789}
+      BANK_ACCOUNT_HOLDER: ${BANK_ACCOUNT_HOLDER:-CONG TY TNHH PHAN BON SHOP VIET NAM}
+      BANK_BRANCH: ${BANK_BRANCH:-Chi nhánh Đắk Lắk - Buôn Ma Thuột}
       PRODUCT_SERVICE_URL: http://product:3002
       INVENTORY_SERVICE_URL: http://inventory:3004
       CUSTOMER_SERVICE_URL: http://customer:3005
@@ -490,11 +496,9 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "${NGINX_HTTPS_PORT:-443}:443"
     volumes:
       - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./docker/nginx/certs:/etc/nginx/certs:ro
+      - ./docker/nginx/conf.d.local:/etc/nginx/conf.d:ro
     depends_on:
       frontend:
         condition: service_healthy

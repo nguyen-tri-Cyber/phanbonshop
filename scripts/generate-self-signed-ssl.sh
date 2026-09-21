@@ -4,7 +4,8 @@
 # ==============================================================================
 set -euo pipefail
 
-CERT_DIR="${1:-./docker/nginx/certs}"
+CERT_DIR="${1:-./.local/certs}"
+# Generated certificates must never be committed.
 mkdir -p "${CERT_DIR}"
 
 KEY_FILE="${CERT_DIR}/privkey.pem"

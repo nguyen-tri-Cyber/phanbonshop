@@ -5,7 +5,11 @@ import { PrismaClient, PaymentMethod, PaymentStatus, PaymentTransactionStatus, O
 import { PaymentStateMachine } from '../dist/payments/payment-state-machine.js';
 import { CodPaymentProvider } from '../dist/payments/providers/cod-payment.provider.js';
 import { BankTransferPaymentProvider } from '../dist/payments/providers/bank-transfer-payment.provider.js';
+import { MomoPaymentProvider } from '../dist/payments/providers/momo-payment.provider.js';
 import { PaymentsService } from '../dist/payments/payments.service.js';
+
+process.env.INTERNAL_SERVICE_SECRET ||= 'integration-test-internal-service-secret';
+process.env.VIETQR_WEBHOOK_SECRET ||= 'integration-test-vietqr-webhook-secret';
 
 // Khởi tạo Prisma Client kết nối database test_order_db (MySQL port 3307)
 const prisma = new PrismaClient({
@@ -19,6 +23,7 @@ const prisma = new PrismaClient({
 describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
   const codProvider = new CodPaymentProvider();
   const bankTransferProvider = new BankTransferPaymentProvider();
+  const momoProvider = new MomoPaymentProvider();
 
   // Mock CompensationService
   const mockCompensationService = {
@@ -29,6 +34,7 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
     prisma,
     codProvider,
     bankTransferProvider,
+    momoProvider,
     mockCompensationService,
   );
 
@@ -166,9 +172,9 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
 
       // Webhook hợp lệ khớp mã đơn
       const validWebhook = await bankTransferProvider.verifyWebhook(
-        {},
+        { 'x-vietqr-webhook-secret': process.env.VIETQR_WEBHOOK_SECRET },
         {
-          transferContent: 'Thanh toan don hang DH-20260920-BT0001',
+          transferContent: 'Thanh toan don hang DH-20260920-BT0001-ABCDEF123456',
           amount: 1500000,
           transactionId: 'VNPAY-TX-998811',
         },
@@ -180,7 +186,7 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
 
       // Webhook không chứa mã đơn hợp lệ
       const invalidWebhook = await bankTransferProvider.verifyWebhook(
-        {},
+        { 'x-vietqr-webhook-secret': process.env.VIETQR_WEBHOOK_SECRET },
         {
           transferContent: 'Tien an trua cho ban',
           amount: 50000,
@@ -233,7 +239,7 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       const retryResult = await paymentsService.createPaymentAttempt(
         order.id,
         PaymentMethod.COD,
-        customerId,
+        { userId: customerId, role: 'CUSTOMER' },
       );
 
       assert.ok(retryResult.paymentTransaction.id);
@@ -242,7 +248,10 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       assert.equal(retryResult.paymentRecord.method, PaymentMethod.COD);
 
       // 4. Kiểm tra toàn bộ lịch sử các lần thử thanh toán
-      const transactions = await paymentsService.getOrderTransactions(order.id);
+      const transactions = await paymentsService.getOrderTransactions(order.id, {
+        userId: customerId,
+        role: 'CUSTOMER',
+      });
       assert.equal(transactions.length, 2);
       assert.equal(transactions[0].id, retryResult.paymentTransaction.id); // Attempt mới nhất ở đầu
       assert.equal(transactions[1].id, initResult.paymentTransaction.id); // Attempt ban đầu
@@ -261,7 +270,10 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       assert.equal(confirmResult.order.status, OrderStatus.CONFIRMED);
 
       // 6. Kiểm tra lại transactions: Đã có thêm bản ghi SUCCESS ghi nhận thời điểm thanh toán
-      const finalTransactions = await paymentsService.getOrderTransactions(order.id);
+      const finalTransactions = await paymentsService.getOrderTransactions(order.id, {
+        userId: customerId,
+        role: 'CUSTOMER',
+      });
       assert.ok(finalTransactions.some((t) => t.status === PaymentTransactionStatus.SUCCESS));
     });
   });
@@ -289,7 +301,7 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       });
       testOrderIds.push(order.id);
 
-      await paymentsService.createPaymentRecord(
+      const initResult = await paymentsService.createPaymentRecord(
         {
           orderId: order.id,
           orderNumber,
@@ -300,13 +312,20 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       );
 
       const webhookBody = {
-        transferContent: `Chuyen khoan don ${orderNumber}`,
+        transferContent: `Chuyen khoan don ${initResult.paymentTransaction.providerOrderId}`,
         amount: 750000,
         transactionId: `TX-BANK-${suffix}`,
       };
+      const webhookHeaders = {
+        'x-vietqr-webhook-secret': process.env.VIETQR_WEBHOOK_SECRET,
+      };
 
       // 2. Bắn Webhook lần 1: Đơn hàng chuyển sang PAID và CONFIRMED
-      const res1 = await paymentsService.handlePaymentWebhook('VIETQR', {}, webhookBody);
+      const res1 = await paymentsService.handlePaymentWebhook(
+        'VIETQR',
+        webhookHeaders,
+        webhookBody,
+      );
       assert.equal(res1.success, true);
       assert.equal(res1.transactionId, `TX-BANK-${suffix}`);
 
@@ -315,7 +334,11 @@ describe('Phase 7 — Payment Architecture & Integrity Tests', () => {
       assert.equal(updatedOrder1.status, OrderStatus.CONFIRMED);
 
       // 3. Bắn Webhook lần 2 (Cổng thanh toán retry do timeout mạng): Idempotent
-      const res2 = await paymentsService.handlePaymentWebhook('VIETQR', {}, webhookBody);
+      const res2 = await paymentsService.handlePaymentWebhook(
+        'VIETQR',
+        webhookHeaders,
+        webhookBody,
+      );
       assert.equal(res2.success, true);
       assert.ok(res2.message.includes('Idempotent'));
 

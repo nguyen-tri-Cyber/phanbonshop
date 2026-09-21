@@ -43,6 +43,7 @@ async function bootstrap(): Promise<void> {
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
+      strictTransportSecurity: process.env.NODE_ENV === 'production',
     }),
   );
 
@@ -50,7 +51,7 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: getCorsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
     exposedHeaders: ['X-Request-ID'],
     credentials: true,
   });
@@ -78,14 +79,16 @@ async function bootstrap(): Promise<void> {
   app.useGlobalFilters(new GlobalExceptionFilter());
 
   // 6. Swagger OpenAPI Documentation tại /docs
-  const config = new DocumentBuilder()
-    .setTitle('Phan Bon Shop - API Gateway')
-    .setDescription('Tài liệu API trung tâm cho nền tảng TMĐT Phân bón Việt Nam')
-    .setVersion('1.0.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
+  if (process.env.NODE_ENV !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('Phan Bon Shop - API Gateway')
+      .setDescription('Tài liệu API trung tâm cho nền tảng TMĐT Phân bón Việt Nam')
+      .setVersion('1.0.0')
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   // 7. Lắng nghe Port 8080
   const port = Number(process.env.GATEWAY_PORT) || CANONICAL_PORTS.GATEWAY;
@@ -95,7 +98,7 @@ async function bootstrap(): Promise<void> {
     port,
     healthEndpoint: `http://localhost:${port}/health`,
     readyEndpoint: `http://localhost:${port}/ready`,
-    swaggerDocs: `http://localhost:${port}/docs`,
+    swaggerDocs: process.env.NODE_ENV === 'production' ? 'disabled' : `http://localhost:${port}/docs`,
   });
 }
 

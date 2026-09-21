@@ -1,5 +1,7 @@
 # Dependencies
 node_modules
+docker/nginx/certs/*.pem
+docker/nginx/certs/*.key
 **/node_modules
 npm-debug.log*
 yarn-debug.log*

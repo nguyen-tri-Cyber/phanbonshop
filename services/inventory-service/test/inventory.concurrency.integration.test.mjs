@@ -4,6 +4,9 @@ import crypto from 'node:crypto';
 import { PrismaService } from '../dist/prisma/prisma.service.js';
 import { InventoryService } from '../dist/inventory/inventory.service.js';
 
+process.env.INTERNAL_SERVICE_SECRET ||= 'inventory-integration-test-internal-secret';
+process.env.ORDER_SERVICE_URL ||= 'http://127.0.0.1:9';
+
 // ============================================================================
 // SAFETY GUARD: Section 9 - Test Database Safety
 // ============================================================================

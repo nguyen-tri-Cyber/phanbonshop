@@ -12,6 +12,7 @@ import { PaymentsService } from './payments.service.js';
 import { ConfirmPaymentDto } from './dto/payment.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator.js';
 import { PaymentMethod } from '../../generated/client/index.js';
 
 @ApiTags('Payments (Thanh Toán)')
@@ -39,16 +40,22 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Lấy thông tin thanh toán của một đơn hàng' })
-  async getOrderPayment(@Param('orderId') orderId: string) {
-    return this.paymentsService.getPaymentByOrderId(orderId);
+  async getOrderPayment(
+    @Param('orderId') orderId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentsService.getPaymentByOrderId(orderId, user);
   }
 
   @Get('orders/:orderId/transactions')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Lấy lịch sử tất cả các lần thử thanh toán của đơn hàng' })
-  async getOrderTransactions(@Param('orderId') orderId: string) {
-    return this.paymentsService.getOrderTransactions(orderId);
+  async getOrderTransactions(
+    @Param('orderId') orderId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentsService.getOrderTransactions(orderId, user);
   }
 
   @Post('orders/:orderId/retry')
@@ -58,9 +65,9 @@ export class PaymentsController {
   async retryPayment(
     @Param('orderId') orderId: string,
     @Body('method') method: PaymentMethod,
-    @CurrentUser('userId') customerId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.paymentsService.createPaymentAttempt(orderId, method, customerId);
+    return this.paymentsService.createPaymentAttempt(orderId, method, user);
   }
 
   @Post('webhook/:provider')
@@ -92,8 +99,11 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Xem chi tiết một giao dịch thanh toán' })
-  async getPaymentDetail(@Param('id') id: string) {
-    return this.paymentsService.getPaymentById(id);
+  async getPaymentDetail(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.paymentsService.getPaymentById(id, user);
   }
 
   @Post(':id/confirm')

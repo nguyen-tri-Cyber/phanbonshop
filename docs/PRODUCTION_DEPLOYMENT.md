@@ -197,6 +197,8 @@ Mọi biến môi trường nhạy cảm trong production được cấu hình q
 | `MINIO_ROOT_PASSWORD` | Mật khẩu MinIO | Tối thiểu 16 ký tự |
 | `JWT_SECRET` | Khóa ký phiên JWT người dùng | Tối thiểu 32 ký tự, mã hóa cao |
 | `INTERNAL_SERVICE_SECRET` | Secret xác thực liên microservice (`x-internal-service`) | Bí mật chia sẻ giữa Gateway & Services |
+| `VIETQR_WEBHOOK_SECRET` | Secret riêng xác thực callback chuyển khoản (`x-vietqr-webhook-secret`) | Để trống nếu chỉ đối soát thủ công; bắt buộc khi bật webhook qua adapter/bridge tin cậy |
+| `BANK_NAME`, `BANK_CODE`, `BANK_ACCOUNT_NUMBER`, `BANK_ACCOUNT_HOLDER` | Tài khoản nhận chuyển khoản/VietQR | Bắt buộc khai báo giá trị thật; order-service fail-fast nếu thiếu trong production |
 | `CORS_ALLOWED_ORIGINS` | Danh sách domain được phép gọi API | Khai báo URL chính xác (ví dụ: `https://phanbonshop.vn`) |
 
 Package `@phanbonshop/config` sẽ tự động xác thực các biến này khi container khởi động. Nếu thiếu bất kỳ biến nào trong chế độ `NODE_ENV=production`, container sẽ dừng ngay lập tức (fail-fast) với thông báo lỗi chi tiết.

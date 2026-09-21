@@ -41,6 +41,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  if (process.env.NODE_ENV !== 'production') {
   const config = new DocumentBuilder()
     .setTitle('Phan Bon Shop - Content Service')
     .setDescription('Dịch vụ quản lý nội dung kiến thức nông nghiệp, tin tức kỹ thuật và banner khuyến mãi')
@@ -49,6 +50,7 @@ async function bootstrap(): Promise<void> {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
+  }
 
   const port = Number(process.env.CONTENT_SERVICE_PORT) || CANONICAL_PORTS.CONTENT_SERVICE;
   await app.listen(port, '0.0.0.0');
@@ -56,7 +58,7 @@ async function bootstrap(): Promise<void> {
   logger.info(`Content Service đã khởi động thành công trên cổng ${port}`, {
     port,
     database: 'content_db',
-    swagger: `http://localhost:${port}/docs`,
+    swagger: process.env.NODE_ENV === 'production' ? 'disabled' : `http://localhost:${port}/docs`,
   });
 }
 

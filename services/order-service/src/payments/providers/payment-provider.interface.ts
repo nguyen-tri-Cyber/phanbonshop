@@ -20,6 +20,8 @@ export interface PaymentInitResult {
   status: PaymentStatus;
   transactionReference?: string;
   transactionId?: string;
+  providerOrderId?: string;
+  providerRequestId?: string;
   payUrl?: string;
   qrCodeUrl?: string;
   paymentDetails?: Record<string, unknown>;
@@ -49,6 +51,9 @@ export interface PaymentWebhookResult {
   orderId?: string;
   transactionId?: string;
   transactionReference?: string;
+  providerOrderId?: string;
+  providerRequestId?: string;
+  providerTransactionId?: string;
   amount?: number;
   status: PaymentStatus;
   isPaid: boolean;

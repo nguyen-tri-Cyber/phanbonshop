@@ -17,6 +17,15 @@ export interface ReleaseInventoryPayload {
   requestId?: string;
 }
 
+export interface CommitInventoryPayload {
+  reservationId: string;
+  referenceId: string;
+  requestId?: string;
+  orderId?: string;
+  paymentAttemptId?: string;
+  providerTransactionId?: string;
+}
+
 @Injectable()
 export class CompensationService implements OnModuleInit, OnModuleDestroy {
   private readonly inventoryServiceUrl = getServiceUrl(
@@ -25,6 +34,7 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
   );
   private readonly internalSecret = getEnvString('INTERNAL_SERVICE_SECRET');
   private workerTimer: NodeJS.Timeout | null = null;
+  private workerRunning = false;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -39,10 +49,15 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
     // 2. Kích hoạt worker chạy định kỳ
     const intervalMs = Number(process.env.COMPENSATION_WORKER_INTERVAL_MS) || 5000;
     this.workerTimer = setInterval(async () => {
+      if (this.workerRunning) return;
+      this.workerRunning = true;
       try {
+        await this.recoverStaleProcessingTasks();
         await this.processPendingTasks();
       } catch (err) {
         logger.error('Lỗi khi worker xử lý compensation tasks định kỳ:', err);
+      } finally {
+        this.workerRunning = false;
       }
     }, intervalMs);
 
@@ -137,15 +152,17 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
    * Thực thi một nhiệm vụ bồi hoàn cụ thể
    */
   async executeTask(task: CompensationTask): Promise<boolean> {
-    let payload: ReleaseInventoryPayload;
+    let payload: Record<string, unknown>;
     try {
-      payload = JSON.parse(task.payload) as ReleaseInventoryPayload;
+      payload = JSON.parse(task.payload) as Record<string, unknown>;
     } catch {
       payload = { reservationId: 'invalid-payload', reason: 'JSON parse error' };
     }
 
-    const requestId = payload.requestId || `comp-${crypto.randomUUID().slice(0, 8)}`;
-    const reservationId = payload.reservationId;
+    const requestId = String(
+      payload.requestId || `comp-${crypto.randomUUID().slice(0, 8)}`,
+    );
+    const reservationId = String(payload.reservationId || '');
     const currentAttempt = task.retryCount + 1;
 
     logger.info('Đang xử lý CompensationTask', {
@@ -161,9 +178,22 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
 
     try {
       if (task.type === CompensationTaskType.RELEASE_INVENTORY) {
-        success = await this.callInventoryRelease(payload.reservationId, payload.reason, requestId);
+        success = await this.callInventoryRelease(
+          reservationId,
+          String(payload.reason || 'Compensation release'),
+          requestId,
+        );
         if (!success) {
           errorMessage = 'Inventory Service trả về phản hồi không thành công (non-2xx)';
+        }
+      } else if (task.type === CompensationTaskType.COMMIT_INVENTORY) {
+        success = await this.callInventoryCommit(
+          reservationId,
+          String(payload.referenceId || ''),
+          requestId,
+        );
+        if (!success) {
+          errorMessage = 'Inventory Service trả về phản hồi commit không thành công (non-2xx)';
         }
       }
     } catch (err) {
@@ -239,6 +269,8 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
     reason: string,
     requestId?: string,
   ): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const res = await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/release`, {
         method: 'POST',
@@ -248,6 +280,7 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
           ...(requestId ? { 'X-Request-Id': requestId } : {}),
         },
         body: JSON.stringify({ reservationId, reason }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -267,6 +300,58 @@ export class CompensationService implements OnModuleInit, OnModuleDestroy {
         error: String(err),
       });
       return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  /** Commit is idempotent in inventory-service, so durable worker retries are safe. */
+  async callInventoryCommit(
+    reservationId: string,
+    referenceId: string,
+    requestId?: string,
+  ): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/commit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Internal-Secret': this.internalSecret,
+          ...(requestId ? { 'X-Request-Id': requestId } : {}),
+        },
+        body: JSON.stringify({ reservationId, referenceId }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        logger.error('INVENTORY_COMMIT_FAILED', undefined, {
+          reservationId,
+          referenceId,
+          requestId,
+          statusCode: res.status,
+          errorText,
+        });
+        return false;
+      }
+
+      logger.info('INVENTORY_COMMIT_SUCCESS', {
+        reservationId,
+        referenceId,
+        requestId,
+      });
+      return true;
+    } catch (err) {
+      logger.error('INVENTORY_COMMIT_FAILED', err, {
+        reservationId,
+        referenceId,
+        requestId,
+      });
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

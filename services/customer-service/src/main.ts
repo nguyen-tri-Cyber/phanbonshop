@@ -31,6 +31,7 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  if (process.env.NODE_ENV !== 'production') {
   const config = new DocumentBuilder()
     .setTitle('Phan Bon Shop - Customer Service')
     .setDescription('Dịch vụ quản lý hồ sơ khách hàng, đại lý, nông dân và sổ địa chỉ giao hàng')
@@ -39,6 +40,7 @@ async function bootstrap(): Promise<void> {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('docs', app, document);
+  }
 
   const port = Number(process.env.CUSTOMER_SERVICE_PORT) || CANONICAL_PORTS.CUSTOMER_SERVICE;
   await app.listen(port, '0.0.0.0');
@@ -46,7 +48,7 @@ async function bootstrap(): Promise<void> {
   logger.info(`Customer Service đã khởi động thành công trên cổng ${port}`, {
     port,
     database: 'customer_db',
-    swagger: `http://localhost:${port}/docs`,
+    swagger: process.env.NODE_ENV === 'production' ? 'disabled' : `http://localhost:${port}/docs`,
   });
 }
 

@@ -6,6 +6,9 @@ import { PrismaService } from '../dist/prisma/prisma.service.js';
 import { InventoryService } from '../dist/inventory/inventory.service.js';
 import { ReservationStatus, MovementType } from '../generated/client/index.js';
 
+process.env.INTERNAL_SERVICE_SECRET ||= 'inventory-integration-test-internal-secret';
+process.env.ORDER_SERVICE_URL ||= 'http://127.0.0.1:9';
+
 // ============================================================================
 // SAFETY GUARD: Section 9 - Test Database Safety
 // ============================================================================
@@ -28,6 +31,9 @@ describe('Phase 2.1 & 2.4 — Inventory Lifecycle & Expiry Worker Integration Te
     prisma = new PrismaService();
     await prisma.$connect();
     inventoryService = new InventoryService(prisma);
+    // Legacy lifecycle assertions exercise claim/release behavior. The payment-aware
+    // decision matrix is covered separately by inventory.payment-aware-expiry.unit.test.mjs.
+    inventoryService.getOrderInventoryDisposition = async () => 'RELEASE';
   });
 
   after(async () => {
