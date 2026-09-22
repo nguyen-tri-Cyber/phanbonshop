@@ -227,6 +227,26 @@ Quá trình Đặt hàng diễn ra qua các bước điều phối nghiêm ngặ
   4. **Tải ảnh MinIO**: Chọn ảnh từ máy tính, hiển thị preview và tự động tải lên dịch vụ lưu trữ phân tán MinIO S3.
   5. **Tự động khởi tạo tồn kho**: Sau khi tạo sản phẩm thành công tại `product-service`, hệ thống tự động gọi `POST /inventory/adjust` sang `inventory-service` để khởi tạo tồn kho vật lý ban đầu cho từng biến thể có tồn kho > 0.
 
+### 7.7. Đồng Bộ Tồn Kho Tự Động & Script Bảo Trì (Inventory Auto-Seeding & Maintenance Sync)
+- **Chuẩn hóa Seed Database Monorepo**:
+  - `services/inventory-service/prisma/seed.ts` được xây dựng để tự động đọc danh sách sản phẩm và biến thể thực tế từ `product_db`, dọn dẹp các ID rác/mồ côi và khởi tạo lượng tồn kho khả dụng từ 50 đến 120 đơn vị kèm lịch sử biến động (`AUDIT_INIT`).
+  - Thiết lập chuỗi seed chuẩn tại root `package.json`: `auth` $\to$ `content` $\to$ `product` $\to$ `inventory`, đảm bảo 100% biến thể luôn có tồn kho hợp lệ sau mỗi lần re-seed.
+- **Công cụ đồng bộ độc lập (`scripts/sync-inventory-stock.mjs`)**: Cho phép quản trị viên đồng bộ tức thì toàn bộ kho hàng với danh mục mà không làm gián đoạn hệ thống hoặc mất dữ liệu vận hành.
+- **Giao diện Quản lý Kho Hàng (`/admin/kho-hang`)**: Hiển thị trực quan Tên phân bón, Mã SKU và Quy cách đóng gói (25kg, 50kg, can 5L...) thay thế các chuỗi UUID thô.
+
+### 7.8. Lưu Trữ Hình Ảnh Phân Bón Phân Tán & Nginx Reverse Proxy (Product Packaging & MinIO Proxy)
+- **Bộ hình ảnh bao bì chuẩn hóa**: Tích hợp hình ảnh bao bì chân thực cho toàn bộ 16 sản phẩm phân bón theo chuẩn nhận diện thương hiệu Việt Nam (Đầu Trâu Bình Điền, Đạm Phú Mỹ, Đạm Cà Mau, Lân Ninh Bình...).
+- **Lưu trữ đa tầng**:
+  - Lưu trữ chính thức trên **MinIO Object Storage** (bucket `product-images`, quyền public read).
+  - Bản sao tĩnh dự phòng tại `apps/frontend/public/images/products/`.
+- **Cấu hình Nginx Reverse Proxy**:
+  - Cập nhật cả 2 file `docker/nginx/conf.d/default.conf` và `docker/nginx/conf.d.local/default.conf` bổ sung route `/product-images/` và `/content-images/` chuyển tiếp trực tiếp tới MinIO (`http://minio:9000`), kèm cache HTTP 30 ngày (`Cache-Control: public, max-age=2592000, immutable`).
+- **Tự động hóa nạp ảnh**: Script `scripts/seed-product-images.mjs` và seed gốc `services/product-service/prisma/seed.ts` tự động gắn kèm `product_images` cho toàn bộ danh mục sản phẩm.
+
+### 7.9. Bảo Vệ & Dọn Dẹp Giỏ Hàng Khách Hàng (Cart Stale Items Cleanup)
+- Dọn dẹp triệt để các bản ghi giỏ hàng mồ côi (trỏ tới các ID sản phẩm test cũ như `LOCAL COD...` đã bị xóa khỏi danh mục).
+- Ngăn ngừa lỗi `BadRequestException: Không tìm thấy sản phẩm ID` khi khách hàng tiến hành thanh toán giỏ hàng chứa sản phẩm đã ngừng kinh doanh hoặc bị xóa khỏi database.
+
 ---
 
 ## 8. SỔ CÁI AUDIT LOG & GIÁM SÁT (AUDIT LOGS & OBSERVABILITY)

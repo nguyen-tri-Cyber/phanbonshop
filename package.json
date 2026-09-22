@@ -30,7 +30,7 @@
     "backup": "bash scripts/backup-databases.sh",
     "backup:win": "powershell -ExecutionPolicy Bypass -File scripts/backup-databases.ps1",
     "restore:win": "powershell -ExecutionPolicy Bypass -File scripts/restore-databases.ps1",
-    "seed": "npm run --workspaces --if-present seed",
+    "seed": "npm run --workspace=@phanbonshop/auth-service seed && npm run --workspace=@phanbonshop/content-service seed && npm run --workspace=@phanbonshop/product-service seed && npm run --workspace=@phanbonshop/inventory-service seed",
     "dev": "npm run --workspaces --if-present dev",
     "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\""
   },

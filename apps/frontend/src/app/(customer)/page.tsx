@@ -77,16 +77,23 @@ export default function HomePage() {
   }, []);
 
   const handleAddToCart = (product: Product) => {
-    const primaryVariant = product.variants?.[0];
-    const price = Number(primaryVariant?.price || product.price);
+    const primaryVariant =
+      product.variants?.find((v) => v.status === 'ACTIVE') || product.variants?.[0];
+
+    if (!primaryVariant) {
+      window.location.href = `/san-pham/${product.slug}`;
+      return;
+    }
+
+    const price = Number(primaryVariant.price || product.price);
 
     addItem({
-      variantId: primaryVariant?.id || `var-${product.id}`,
+      variantId: primaryVariant.id,
       productId: product.id,
       productName: product.name,
       productSlug: product.slug,
-      sku: primaryVariant?.sku || product.sku,
-      packageSize: primaryVariant?.packageSize || 'Tiêu chuẩn',
+      sku: primaryVariant.sku || product.sku,
+      packageSize: primaryVariant.packageSize || 'Tiêu chuẩn',
       price: isNaN(price) ? 0 : price,
       quantity: 1,
       imageUrl: product.images?.[0]?.url,

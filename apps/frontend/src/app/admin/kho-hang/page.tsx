@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { apiClient } from '../../../lib/api-client';
 import { formatDateTimeVN } from '../../../lib/formatters';
+import { Product } from '../../../types/index';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Badge } from '../../../components/ui/badge';
@@ -80,6 +81,8 @@ export default function AdminInventoryPage() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [productMap, setProductMap] = useState<Map<string, { name: string; sku: string }>>(new Map());
+  const [variantMap, setVariantMap] = useState<Map<string, { packageSize: string; sku: string }>>(new Map());
 
   const {
     register,
@@ -138,6 +141,32 @@ export default function AdminInventoryPage() {
   useEffect(() => {
     loadInventory();
   }, [loadInventory]);
+
+  useEffect(() => {
+    async function loadCatalog() {
+      try {
+        const res = await apiClient<{ items: Product[] }>('/products?limit=100');
+        if (res.success && res.data?.items) {
+          const pMap = new Map<string, { name: string; sku: string }>();
+          const vMap = new Map<string, { packageSize: string; sku: string }>();
+
+          for (const prod of res.data.items) {
+            pMap.set(prod.id, { name: prod.name, sku: prod.sku });
+            if (prod.variants) {
+              for (const v of prod.variants) {
+                vMap.set(v.id, { packageSize: v.packageSize, sku: v.sku });
+              }
+            }
+          }
+          setProductMap(pMap);
+          setVariantMap(vMap);
+        }
+      } catch (err) {
+        console.warn('Lỗi tải danh mục sản phẩm cho bảng kho:', err);
+      }
+    }
+    loadCatalog();
+  }, []);
 
   const openAdjustModal = (item?: InventoryItem) => {
     setFeedback(null);
@@ -268,8 +297,8 @@ export default function AdminInventoryPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50/70">
-                <TableHead className="text-xs font-semibold">Product ID</TableHead>
-                <TableHead className="text-xs font-semibold">Variant ID</TableHead>
+                <TableHead className="text-xs font-semibold">Sản Phẩm</TableHead>
+                <TableHead className="text-xs font-semibold">Quy Cách Đóng Gói</TableHead>
                 <TableHead className="text-xs font-semibold text-center">Tồn Vật Lý</TableHead>
                 <TableHead className="text-xs font-semibold text-center">Tạm Giữ (Reserved)</TableHead>
                 <TableHead className="text-xs font-semibold text-center">Khả Dụng (Available)</TableHead>
@@ -302,14 +331,26 @@ export default function AdminInventoryPage() {
                 items.map((item) => {
                   const isLow = item.availableQuantity <= item.reorderLevel;
                   const isOut = item.availableQuantity <= 0;
+                  const prodInfo = productMap.get(item.productId);
+                  const varInfo = variantMap.get(item.variantId);
 
                   return (
                     <TableRow key={item.id} className="hover:bg-gray-50/70 transition-colors">
-                      <TableCell className="font-mono text-xs font-semibold text-gray-800">
-                        {item.productId}
+                      <TableCell className="max-w-[240px]">
+                        <div className="font-bold text-xs text-gray-900 line-clamp-1" title={prodInfo?.name || item.productId}>
+                          {prodInfo?.name || item.productId}
+                        </div>
+                        <div className="font-mono text-[10px] text-gray-400">
+                          {prodInfo?.sku ? `SKU: ${prodInfo.sku}` : item.productId}
+                        </div>
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-gray-600">
-                        {item.variantId}
+                      <TableCell className="max-w-[180px]">
+                        <div className="font-semibold text-xs text-emerald-800">
+                          {varInfo?.packageSize || 'Quy cách chuẩn'}
+                        </div>
+                        <div className="font-mono text-[10px] text-gray-400">
+                          {varInfo?.sku || item.variantId}
+                        </div>
                       </TableCell>
                       <TableCell className="text-center text-xs font-bold text-gray-900">
                         {item.stockQuantity}

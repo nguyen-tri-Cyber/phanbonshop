@@ -16,7 +16,8 @@ interface ProductCardProps {
 export function ProductCard({ product }: ProductCardProps) {
   const { addItem } = useCart();
 
-  const primaryVariant = product.variants?.[0];
+  const primaryVariant =
+    product.variants?.find((v) => v.status === 'ACTIVE') || product.variants?.[0];
   const price = Number(primaryVariant?.price || product.price);
   const comparePrice = Number(primaryVariant?.compareAtPrice || product.compareAtPrice);
   const imageUrl = product.images?.[0]?.url;
@@ -30,13 +31,19 @@ export function ProductCard({ product }: ProductCardProps) {
     e.preventDefault();
     e.stopPropagation();
 
+    if (!primaryVariant) {
+      // Nếu sản phẩm chưa có biến thể sẵn sàng, điều hướng vào trang chi tiết để chọn
+      window.location.href = `/san-pham/${product.slug}`;
+      return;
+    }
+
     addItem({
-      variantId: primaryVariant?.id || `var-${product.id}`,
+      variantId: primaryVariant.id,
       productId: product.id,
       productName: product.name,
       productSlug: product.slug,
-      sku: primaryVariant?.sku || product.sku,
-      packageSize: primaryVariant?.packageSize || 'Tiêu chuẩn',
+      sku: primaryVariant.sku || product.sku,
+      packageSize: primaryVariant.packageSize || 'Tiêu chuẩn',
       price: isNaN(price) ? 0 : price,
       quantity: 1,
       imageUrl: imageUrl,

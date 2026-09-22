@@ -43,4 +43,5 @@ Thumbs.db
 *.tmp
 *.tmp*
 tasks/
+scratch/
 

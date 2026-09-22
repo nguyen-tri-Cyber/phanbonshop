@@ -653,6 +653,17 @@ async function main(): Promise<void> {
             status: VariantStatus.ACTIVE,
           })),
         },
+        images: {
+          create: [
+            {
+              objectKey: `products/${p.sku}.jpg`,
+              url: `/product-images/products/${p.sku}.jpg`,
+              altText: `Hình ảnh bao bì ${p.name}`,
+              sortOrder: 0,
+              isPrimary: true,
+            },
+          ],
+        },
         agriculturalAttrs: {
           create: p.attrs.map((a) => ({
             attributeType: a.attributeType,
