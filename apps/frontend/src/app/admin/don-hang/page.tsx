@@ -105,8 +105,8 @@ const ALLOWED_NEXT_STATUS: Record<string, string[]> = {
   DELIVERED: ['COMPLETED', 'RETURN_REQUESTED'],
   COMPLETED: ['RETURN_REQUESTED'],
   RETURN_REQUESTED: ['RETURNED', 'DELIVERED'],
-  RETURNED: ['REFUNDED'],
-  CANCELLED: [],
+  RETURNED: ['REFUNDED', 'CANCELLED'],
+  CANCELLED: ['REFUNDED'],
   REFUNDED: [],
 };
 
@@ -596,8 +596,15 @@ export default function AdminOrdersPage() {
                     </div>
                   </div>
 
-                  {/* Bank Transfer Confirmation CTA */}
-                  {selectedOrder.paymentStatus !== 'PAID' && selectedOrder.payments && selectedOrder.payments[0] && (
+                  {/* Bank Transfer / Cash Confirmation CTA */}
+                  {selectedOrder.status !== 'CANCELLED' &&
+                    selectedOrder.status !== 'REFUNDED' &&
+                    selectedOrder.status !== 'RETURNED' &&
+                    selectedOrder.paymentStatus !== 'PAID' &&
+                    selectedOrder.paymentStatus !== 'CANCELLED' &&
+                    selectedOrder.paymentStatus !== 'REFUNDED' &&
+                    selectedOrder.payments &&
+                    selectedOrder.payments[0] && (
                     <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
                       <p className="text-[11px] text-amber-700">
                         Đơn chưa được thanh toán. Sau khi kiểm tra sao kê ngân hàng hoặc thu tiền mặt, hãy xác nhận:
@@ -629,23 +636,55 @@ export default function AdminOrdersPage() {
                     className="text-xs bg-white"
                   />
                   <div className="flex flex-wrap gap-2">
-                    {ALLOWED_NEXT_STATUS[selectedOrder.status]?.length ? (
-                      ALLOWED_NEXT_STATUS[selectedOrder.status].map((next) => (
-                        <Button
-                          key={next}
-                          size="sm"
-                          variant={next === 'CANCELLED' ? 'outline' : 'default'}
-                          onClick={() => handleUpdateStatus(next)}
-                          className={next === 'CANCELLED' ? 'text-red-600 hover:bg-red-50 text-xs' : 'text-xs'}
-                        >
-                          Chuyển sang: {next}
-                        </Button>
-                      ))
-                    ) : (
-                      <p className="text-xs text-gray-500 italic">
-                        Đơn hàng đã ở trạng thái kết thúc ({selectedOrder.status}), không thể chuyển trạng thái tiếp theo.
-                      </p>
-                    )}
+                    {(() => {
+                      const isPaid =
+                        selectedOrder.paymentStatus === 'PAID' ||
+                        selectedOrder.paymentStatus === 'PARTIALLY_REFUNDED';
+                      const validStatuses = (ALLOWED_NEXT_STATUS[selectedOrder.status] || []).filter(
+                        (next) => {
+                          // Không hiển thị nút Hoàn tiền nếu đơn hàng chưa thanh toán
+                          if (next === 'REFUNDED' && !isPaid) return false;
+                          return true;
+                        },
+                      );
+
+                      return validStatuses.length ? (
+                        validStatuses.map((next) => {
+                          const isBlockedCompletion =
+                            next === 'COMPLETED' &&
+                            selectedOrder.paymentMethod !== 'COD' &&
+                            !isPaid;
+
+                          return (
+                            <Button
+                              key={next}
+                              size="sm"
+                              disabled={isBlockedCompletion}
+                              title={
+                                isBlockedCompletion
+                                  ? 'Cần bấm "Xác Nhận Đã Thu Tiền" bên trên trước khi hoàn tất đơn hàng chuyển khoản'
+                                  : undefined
+                              }
+                              variant={next === 'CANCELLED' ? 'outline' : 'default'}
+                              onClick={() => handleUpdateStatus(next)}
+                              className={
+                                next === 'CANCELLED'
+                                  ? 'text-red-600 hover:bg-red-50 text-xs'
+                                  : isBlockedCompletion
+                                  ? 'opacity-50 cursor-not-allowed text-xs'
+                                  : 'text-xs'
+                              }
+                            >
+                              Chuyển sang: {next === 'REFUNDED' ? 'Hoàn tiền (REFUNDED)' : next === 'CANCELLED' ? 'Hủy / Đóng đơn' : next}
+                            </Button>
+                          );
+                        })
+                      ) : (
+                        <p className="text-xs text-gray-500 italic">
+                          Đơn hàng đã ở trạng thái kết thúc ({selectedOrder.status}), không thể chuyển trạng thái tiếp theo.
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

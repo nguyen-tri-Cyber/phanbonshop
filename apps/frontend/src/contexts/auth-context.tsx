@@ -8,8 +8,17 @@ interface AuthContextType {
   user: User | null;
   accessToken: string | null;
   isLoading: boolean;
-  login: (credentials: { email: string; password: string }) => Promise<{ success: boolean; error?: string }>;
-  register: (payload: { fullName: string; email: string; phone: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  login: (credentials: {
+    email: string;
+    password: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: (credential: string) => Promise<{ success: boolean; error?: string }>;
+  register: (payload: {
+    fullName: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
   hasRole: (roles: UserRole[]) => boolean;
@@ -103,6 +112,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
+      setUser(data.data.user);
+      setToken(data.data.accessToken);
+      setAccessToken(data.data.accessToken);
+
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Lỗi kết nối máy chủ',
+      };
+    }
+  };
+
+  const loginWithGoogle = async (credential: string) => {
+    try {
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Google-Identity': '1',
+        },
+        body: JSON.stringify({ credential }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        return {
+          success: false,
+          error: data.error?.message || 'Đăng nhập Google không thành công',
+        };
+      }
+
+      setUser(data.data.user);
+      setToken(data.data.accessToken);
+      setAccessToken(data.data.accessToken);
       return { success: true };
     } catch (err) {
       return {
@@ -140,6 +184,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         accessToken,
         isLoading,
         login,
+        loginWithGoogle,
         register,
         logout,
         refreshSession,

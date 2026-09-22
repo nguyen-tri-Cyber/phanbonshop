@@ -365,7 +365,33 @@ export class PaymentsService {
     });
     const order = payment.order;
 
-    // 2. Idempotency Check: Nếu đã thanh toán rồi thì trả về kết quả cũ
+    // 2. Order & Payment Status Guard: Không cho phép xác nhận đơn đã hủy hoặc kết thúc
+    if (order.status === OrderStatus.CANCELLED) {
+      throw new BadRequestException(
+        `Không thể xác nhận thanh toán cho đơn hàng đã bị hủy (${order.orderNumber}).`,
+      );
+    }
+    if (order.status === OrderStatus.RETURNED || order.status === OrderStatus.REFUNDED) {
+      throw new BadRequestException(
+        `Không thể xác nhận thanh toán cho đơn hàng ở trạng thái ${order.status} (${order.orderNumber}).`,
+      );
+    }
+    if (
+      payment.status === PaymentStatus.CANCELLED ||
+      payment.status === PaymentStatus.REFUNDED ||
+      order.paymentStatus === PaymentStatus.CANCELLED ||
+      order.paymentStatus === PaymentStatus.REFUNDED
+    ) {
+      const reason =
+        payment.status === PaymentStatus.REFUNDED || order.paymentStatus === PaymentStatus.REFUNDED
+          ? 'đã hoàn tiền'
+          : 'đã bị hủy';
+      throw new BadRequestException(
+        `Giao dịch thanh toán của đơn hàng ${order.orderNumber} ${reason} và không thể xác nhận thành công.`,
+      );
+    }
+
+    // 3. Idempotency Check: Nếu đã thanh toán rồi thì trả về kết quả cũ
     if (payment.status === PaymentStatus.PAID) {
       logger.info(
         `[Idempotent] Giao dịch thanh toán ${paymentId} đã được xác nhận PAID trước đó`,
@@ -379,7 +405,7 @@ export class PaymentsService {
       };
     }
 
-    // 3. State Machine Validation: Xác thực chuyển đổi trạng thái
+    // 4. State Machine Validation: Xác thực chuyển đổi trạng thái
     PaymentStateMachine.assertTransition(payment.status, PaymentStatus.PAID);
 
     // 4. Amount Validation: Không cho xác nhận số tiền khác tổng đơn
@@ -495,7 +521,7 @@ export class PaymentsService {
         where: { id: order.id },
         include: { items: true },
       });
-      if (orderWithItems?.reservationId) {
+      if (orderWithItems?.reservationId && nextOrderStatus !== OrderStatus.CANCELLED) {
         for (const item of orderWithItems.items) {
           const reservationId = `${orderWithItems.reservationId}-${item.variantId}`;
           await tx.compensationTask.upsert({
@@ -730,7 +756,7 @@ export class PaymentsService {
             },
           });
 
-          if (order.reservationId) {
+          if (order.reservationId && nextStatus !== OrderStatus.CANCELLED) {
             for (const item of order.items) {
               const reservationId = `${order.reservationId}-${item.variantId}`;
               await tx.compensationTask.upsert({

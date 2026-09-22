@@ -1,35 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getProvinces, getDistricts, getWards } from '@phanbonshop/shared-utils';
+import {
+  calculateShippingFee,
+  getProvinces,
+  getDistricts,
+  getWards,
+} from '@phanbonshop/shared-utils';
 
 test('=== PHASE 3: FRONTEND CHECKOUT & INTEGRATION TESTS ===', async (t) => {
-  await t.test('1. Pricing calculation: Free shipping threshold and coupon discount', () => {
-    const FREE_SHIPPING_THRESHOLD = 1000000;
-    const STANDARD_SHIPPING_FEE = 30000;
-
-    // Case A: Cart < 1,000,000 VND without coupon
+  await t.test('1. Pricing calculation: Regional fee, free shipping and coupon discount', () => {
+    // Case A: Southern province, cart below the 2,000,000 VND threshold
     const cartA = [
       { price: 250000, quantity: 2 }, // 500,000
       { price: 150000, quantity: 1 }, // 150,000
     ];
     const subtotalA = cartA.reduce((sum, item) => sum + item.price * item.quantity, 0);
     assert.equal(subtotalA, 650000);
-    const shippingFeeA = subtotalA >= FREE_SHIPPING_THRESHOLD ? 0 : STANDARD_SHIPPING_FEE;
-    assert.equal(shippingFeeA, 30000);
+    const shippingFeeA = calculateShippingFee({ subtotal: subtotalA, provinceCode: '79' }).shippingFee;
+    assert.equal(shippingFeeA, 60000);
     const finalTotalA = subtotalA + shippingFeeA;
-    assert.equal(finalTotalA, 680000);
+    assert.equal(finalTotalA, 710000);
 
-    // Case B: Cart >= 1,000,000 VND with coupon discount 50,000 VND
+    // Case B: Cart at the 2,000,000 VND threshold with coupon discount 50,000 VND
     const cartB = [
-      { price: 600000, quantity: 2 }, // 1,200,000
+      { price: 1000000, quantity: 2 }, // 2,000,000
     ];
     const subtotalB = cartB.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    assert.equal(subtotalB, 1200000);
-    const shippingFeeB = subtotalB >= FREE_SHIPPING_THRESHOLD ? 0 : STANDARD_SHIPPING_FEE;
-    assert.equal(shippingFeeB, 0, 'Đơn từ 1.000.000đ trở lên phải được miễn phí ship');
+    assert.equal(subtotalB, 2000000);
+    const shippingFeeB = calculateShippingFee({ subtotal: subtotalB, provinceCode: '01' }).shippingFee;
+    assert.equal(shippingFeeB, 0, 'Đơn từ 2.000.000đ trở lên phải được miễn phí ship');
     const discountAmountB = 50000;
     const finalTotalB = Math.max(0, subtotalB - discountAmountB + shippingFeeB);
-    assert.equal(finalTotalB, 1150000);
+    assert.equal(finalTotalB, 1950000);
   });
 
   await t.test('2. VietQR dynamic generation parameters for BANK_TRANSFER', () => {
@@ -53,9 +55,7 @@ test('=== PHASE 3: FRONTEND CHECKOUT & INTEGRATION TESTS ===', async (t) => {
     assert.ok(uuidRegex.test(testUuid));
 
     const checkoutPayload = {
-      items: [
-        { productId: 'prod-npk-1', variantId: 'var-npk-50kg', quantity: 2 },
-      ],
+      items: [{ productId: 'prod-npk-1', variantId: 'var-npk-50kg', quantity: 2 }],
       shippingAddress: {
         recipientName: 'Nguyễn Văn Nông',
         phone: '0912345678',

@@ -31,6 +31,7 @@ describe('Phase 1.6 — Auth Critical Flows Integration Tests (Real MySQL test_a
   let prisma;
   let authService;
   let devEmailProvider;
+  let googleIdentity;
 
   before(async () => {
     prisma = new PrismaService();
@@ -40,7 +41,10 @@ describe('Phase 1.6 — Auth Critical Flows Integration Tests (Real MySQL test_a
     devEmailProvider = new DevEmailProvider();
     const emailService = new EmailService(devEmailProvider);
 
-    authService = new AuthService(prisma, jwtService, emailService);
+    googleIdentity = null;
+    authService = new AuthService(prisma, jwtService, emailService, {
+      verify: async () => googleIdentity,
+    });
   });
 
   after(async () => {
@@ -55,7 +59,71 @@ describe('Phase 1.6 — Auth Critical Flows Integration Tests (Real MySQL test_a
     await prisma.auditLog.deleteMany({});
     await prisma.passwordResetToken.deleteMany({});
     await prisma.refreshTokenSession.deleteMany({});
+    await prisma.externalIdentity.deleteMany({});
     await prisma.user.deleteMany({});
+  });
+
+  it('1.6.6: Repeated verified Gmail login binds one Google subject to one user', async () => {
+    googleIdentity = {
+      subject: `google-${crypto.randomUUID()}`,
+      email: `farmer-${crypto.randomUUID().slice(0, 8)}@gmail.com`,
+      fullName: 'Nông dân Google',
+      avatarUrl: null,
+    };
+
+    const first = await authService.loginWithGoogle({ credential: 'verified-token' });
+    const second = await authService.loginWithGoogle({ credential: 'verified-token' });
+
+    assert.equal(second.user.id, first.user.id);
+    assert.equal(await prisma.user.count({ where: { email: googleIdentity.email } }), 1);
+    assert.equal(
+      await prisma.externalIdentity.count({
+        where: { providerSubject: googleIdentity.subject },
+      }),
+      1,
+    );
+  });
+
+  it('1.6.8: Google sign-in never auto-links an existing privileged account', async () => {
+    googleIdentity = {
+      subject: `google-${crypto.randomUUID()}`,
+      email: `admin-${crypto.randomUUID().slice(0, 8)}@gmail.com`,
+      fullName: 'Quản trị viên',
+      avatarUrl: null,
+    };
+    await prisma.user.create({
+      data: {
+        email: googleIdentity.email,
+        passwordHash: await authService.hashPassword('StrongPassword@2026'),
+        fullName: googleIdentity.fullName,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+
+    await assert.rejects(
+      () => authService.loginWithGoogle({ credential: 'verified-token' }),
+      (error) => error?.status === 403,
+    );
+    assert.equal(await prisma.externalIdentity.count(), 0);
+  });
+
+  it('1.6.7: Configuring Google automatically requires verified Google registration', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'test-client.apps.googleusercontent.com';
+    try {
+      await assert.rejects(
+        () =>
+          authService.register({
+            email: `blocked-${crypto.randomUUID()}@example.com`,
+            phone: `09${Math.floor(10000000 + Math.random() * 90000000)}`,
+            password: 'StrongPassword@2026',
+            fullName: 'Tài khoản chưa xác minh',
+          }),
+        (error) => error?.status === 403,
+      );
+    } finally {
+      delete process.env.GOOGLE_CLIENT_ID;
+    }
   });
 
   it('1.6.1: Register success & rejection of duplicate email and phone', async () => {
@@ -194,7 +262,11 @@ describe('Phase 1.6 — Auth Critical Flows Integration Tests (Real MySQL test_a
     const refreshResult = await authService.refresh(originalRefreshToken);
     assert.ok(refreshResult.accessToken, 'Must return new accessToken');
     assert.ok(refreshResult.refreshToken, 'Must return new refreshToken');
-    assert.notEqual(refreshResult.refreshToken, originalRefreshToken, 'New refreshToken must differ');
+    assert.notEqual(
+      refreshResult.refreshToken,
+      originalRefreshToken,
+      'New refreshToken must differ',
+    );
 
     // 2. Verify original session in DB is now REVOKED
     const originalHash = authService.hashToken(originalRefreshToken);

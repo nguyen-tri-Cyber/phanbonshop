@@ -219,6 +219,14 @@ Quá trình Đặt hàng diễn ra qua các bước điều phối nghiêm ngặ
   3. Đơn hàng đó có thực sự chứa sản phẩm/biến thể đang đánh giá hay không?
 - Chỉ khi thỏa mãn cả 3 điều kiện, backend mới tự động gán `verifiedPurchase = true`. Client gửi trường `verifiedPurchase` giả mạo sẽ bị Validation Pipe từ chối ngay lập tức.
 
+### 7.6. Đăng Bán Sản Phẩm Mới & Đồng Bộ Tồn Kho Đa Quy Cách (Product Creation & Inventory Sync)
+- Quản trị viên sử dụng giao diện Modal tạo sản phẩm chuyên sâu phân bón (`/admin/san-pham`):
+  1. **Thông tin chung**: Tên phân bón, SKU chính (hỗ trợ tự sinh SKU thông minh), Danh mục, Thương hiệu, Giá bán tham chiếu, Giá niêm yết so sánh, cờ `ACTIVE`, `bestSeller`, `featured`.
+  2. **Quy cách đóng gói linh hoạt (Multi-variants)**: Thêm động nhiều biến thể (Bao 25kg, Can 5L, Chai 1L...), gán SKU và giá bán riêng cho từng quy cách kèm số lượng tồn kho nhập ban đầu.
+  3. **Thông số nông nghiệp**: Cây trồng khuyến cáo, định lượng thành phần hóa học (N-P-K-TE), hướng dẫn liều lượng bón.
+  4. **Tải ảnh MinIO**: Chọn ảnh từ máy tính, hiển thị preview và tự động tải lên dịch vụ lưu trữ phân tán MinIO S3.
+  5. **Tự động khởi tạo tồn kho**: Sau khi tạo sản phẩm thành công tại `product-service`, hệ thống tự động gọi `POST /inventory/adjust` sang `inventory-service` để khởi tạo tồn kho vật lý ban đầu cho từng biến thể có tồn kho > 0.
+
 ---
 
 ## 8. SỔ CÁI AUDIT LOG & GIÁM SÁT (AUDIT LOGS & OBSERVABILITY)

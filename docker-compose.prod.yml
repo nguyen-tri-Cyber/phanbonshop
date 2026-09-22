@@ -35,6 +35,9 @@ services:
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+        NEXT_PUBLIC_REQUIRE_GOOGLE_REGISTRATION: "true"
     container_name: phanbonshop_frontend_prod
     restart: unless-stopped
     expose:
@@ -47,6 +50,8 @@ services:
       NEXT_PUBLIC_API_GATEWAY_URL: /api
       INTERNAL_GATEWAY_URL: http://gateway:8080
       INTERNAL_API_URL: http://gateway:8080/api/v1
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      NEXT_PUBLIC_REQUIRE_GOOGLE_REGISTRATION: "true"
     networks:
       - internal_network
     healthcheck:
@@ -152,6 +157,8 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
       INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required}
+      REQUIRE_GOOGLE_REGISTRATION: "true"
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}

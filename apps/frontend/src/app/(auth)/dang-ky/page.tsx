@@ -6,11 +6,22 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Sprout, UserPlus, Lock, Mail, Phone, User, AlertCircle, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import {
+  Sprout,
+  UserPlus,
+  Lock,
+  Mail,
+  Phone,
+  User,
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+} from 'lucide-react';
 import { useAuth } from '../../../contexts/auth-context';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Alert, AlertDescription } from '../../../components/ui/alert';
+import { GoogleSignInButton } from '../../../components/auth/google-sign-in-button';
 
 const registerSchema = z
   .object({
@@ -35,6 +46,9 @@ const registerSchema = z
 type RegisterFormValues = z.infer<typeof registerSchema>;
 
 export default function RegisterPage() {
+  const requireGoogleRegistration =
+    Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.trim()) ||
+    process.env.NEXT_PUBLIC_REQUIRE_GOOGLE_REGISTRATION === 'true';
   const router = useRouter();
   const { register: registerUser } = useAuth();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -68,9 +82,9 @@ export default function RegisterPage() {
     });
 
     if (res.success) {
-      setSuccessMessage('Đăng ký tài khoản thành công! Đang chuyển đến trang đăng nhập...');
+      setSuccessMessage('Đăng ký tài khoản thành công! Đang chuyển đến tài khoản của bạn...');
       setTimeout(() => {
-        router.push('/dang-nhap');
+        router.push('/tai-khoan');
       }, 1500);
     } else {
       setErrorMessage(res.error || 'Đăng ký không thành công');
@@ -85,9 +99,7 @@ export default function RegisterPage() {
           <div className="h-10 w-10 rounded-lg bg-primary-600 flex items-center justify-center text-white shadow-md">
             <Sprout className="h-6 w-6" />
           </div>
-          <span className="text-xl font-black text-primary-800 tracking-tight">
-            PHÂN BÓN SHOP
-          </span>
+          <span className="text-xl font-black text-primary-800 tracking-tight">PHÂN BÓN SHOP</span>
         </Link>
         <h2 className="mt-4 text-2xl font-black text-gray-900 tracking-tight">
           Đăng Ký Tài Khoản Mới
@@ -116,121 +128,137 @@ export default function RegisterPage() {
             </Alert>
           )}
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
-            {/* Họ và tên */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Họ và tên
-              </label>
-              <div className="relative">
-                <Input
-                  type="text"
-                  placeholder="Nguyễn Văn Nông Dân"
-                  {...register('fullName')}
-                  className={errors.fullName ? 'border-red-500' : ''}
-                />
-                <User className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              </div>
-              {errors.fullName && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.fullName.message}
-                </p>
-              )}
-            </div>
+          <GoogleSignInButton mode="signup" onAuthenticated={() => router.push('/tai-khoan')} />
 
-            {/* Email */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Địa chỉ Email
-              </label>
-              <div className="relative">
-                <Input
-                  type="email"
-                  placeholder="nongdan@gmail.com"
-                  {...register('email')}
-                  className={errors.email ? 'border-red-500' : ''}
-                />
-                <Mail className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              </div>
-              {errors.email && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.email.message}
-                </p>
-              )}
+          {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && !requireGoogleRegistration && (
+            <div className="flex items-center gap-3" aria-hidden="true">
+              <div className="h-px flex-1 bg-gray-200" />
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                hoặc đăng ký bằng email
+              </span>
+              <div className="h-px flex-1 bg-gray-200" />
             </div>
+          )}
 
-            {/* Số điện thoại */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Số điện thoại liên hệ
-              </label>
-              <div className="relative">
-                <Input
-                  type="tel"
-                  placeholder="0912345678"
-                  {...register('phone')}
-                  className={errors.phone ? 'border-red-500' : ''}
-                />
-                <Phone className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          {requireGoogleRegistration && (
+            <p className="text-center text-xs leading-5 text-gray-600">
+              Để hạn chế tài khoản ảo, tài khoản mới cần được Google xác minh bằng Gmail thật.
+            </p>
+          )}
+
+          {!requireGoogleRegistration && (
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5">
+              {/* Họ và tên */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Họ và tên</label>
+                <div className="relative">
+                  <Input
+                    type="text"
+                    placeholder="Nguyễn Văn Nông Dân"
+                    {...register('fullName')}
+                    className={errors.fullName ? 'border-red-500' : ''}
+                  />
+                  <User className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                {errors.fullName && (
+                  <p className="mt-1 text-[11px] text-red-600 font-medium">
+                    {errors.fullName.message}
+                  </p>
+                )}
               </div>
-              {errors.phone && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.phone.message}
-                </p>
-              )}
-            </div>
 
-            {/* Mật khẩu */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Mật khẩu
-              </label>
-              <div className="relative">
-                <Input
-                  type="password"
-                  placeholder="Tối thiểu 8 ký tự, 1 hoa, 1 số"
-                  {...register('password')}
-                  className={errors.password ? 'border-red-500' : ''}
-                />
-                <Lock className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              {/* Email */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Địa chỉ Email
+                </label>
+                <div className="relative">
+                  <Input
+                    type="email"
+                    placeholder="nongdan@gmail.com"
+                    {...register('email')}
+                    className={errors.email ? 'border-red-500' : ''}
+                  />
+                  <Mail className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                {errors.email && (
+                  <p className="mt-1 text-[11px] text-red-600 font-medium">
+                    {errors.email.message}
+                  </p>
+                )}
               </div>
-              {errors.password && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.password.message}
-                </p>
-              )}
-            </div>
 
-            {/* Xác nhận mật khẩu */}
-            <div>
-              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                Xác nhận lại mật khẩu
-              </label>
-              <div className="relative">
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  {...register('confirmPassword')}
-                  className={errors.confirmPassword ? 'border-red-500' : ''}
-                />
-                <Lock className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              {/* Số điện thoại */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Số điện thoại liên hệ
+                </label>
+                <div className="relative">
+                  <Input
+                    type="tel"
+                    placeholder="0912345678"
+                    {...register('phone')}
+                    className={errors.phone ? 'border-red-500' : ''}
+                  />
+                  <Phone className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                {errors.phone && (
+                  <p className="mt-1 text-[11px] text-red-600 font-medium">
+                    {errors.phone.message}
+                  </p>
+                )}
               </div>
-              {errors.confirmPassword && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.confirmPassword.message}
-                </p>
-              )}
-            </div>
 
-            <Button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full justify-center space-x-2 font-bold shadow-sm mt-2"
-            >
-              <UserPlus className="h-4 w-4" />
-              <span>{isSubmitting ? 'Đang khởi tạo tài khoản...' : 'Đăng Ký Tài Khoản'}</span>
-            </Button>
-          </form>
+              {/* Mật khẩu */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">Mật khẩu</label>
+                <div className="relative">
+                  <Input
+                    type="password"
+                    placeholder="Tối thiểu 8 ký tự, 1 hoa, 1 số"
+                    {...register('password')}
+                    className={errors.password ? 'border-red-500' : ''}
+                  />
+                  <Lock className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                {errors.password && (
+                  <p className="mt-1 text-[11px] text-red-600 font-medium">
+                    {errors.password.message}
+                  </p>
+                )}
+              </div>
+
+              {/* Xác nhận mật khẩu */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1">
+                  Xác nhận lại mật khẩu
+                </label>
+                <div className="relative">
+                  <Input
+                    type="password"
+                    placeholder="••••••••"
+                    {...register('confirmPassword')}
+                    className={errors.confirmPassword ? 'border-red-500' : ''}
+                  />
+                  <Lock className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+                {errors.confirmPassword && (
+                  <p className="mt-1 text-[11px] text-red-600 font-medium">
+                    {errors.confirmPassword.message}
+                  </p>
+                )}
+              </div>
+
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full justify-center space-x-2 font-bold shadow-sm mt-2"
+              >
+                <UserPlus className="h-4 w-4" />
+                <span>{isSubmitting ? 'Đang khởi tạo tài khoản...' : 'Đăng Ký Tài Khoản'}</span>
+              </Button>
+            </form>
+          )}
 
           <div className="text-center pt-2">
             <Link

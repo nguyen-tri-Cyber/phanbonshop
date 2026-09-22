@@ -42,3 +42,5 @@ Thumbs.db
 .codegraph/
 *.tmp
 *.tmp*
+tasks/
+

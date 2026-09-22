@@ -11,6 +11,7 @@ import { useAuth } from '../../../contexts/auth-context';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
 import { Alert, AlertDescription } from '../../../components/ui/alert';
+import { GoogleSignInButton } from '../../../components/auth/google-sign-in-button';
 
 const loginSchema = z.object({
   email: z.string().min(1, 'Vui lòng nhập email').email('Email không đúng định dạng'),
@@ -68,9 +69,7 @@ function LoginContent() {
           <div className="h-10 w-10 rounded-lg bg-primary-600 flex items-center justify-center text-white shadow-md">
             <Sprout className="h-6 w-6" />
           </div>
-          <span className="text-xl font-black text-primary-800 tracking-tight">
-            PHÂN BÓN SHOP
-          </span>
+          <span className="text-xl font-black text-primary-800 tracking-tight">PHÂN BÓN SHOP</span>
         </Link>
         <h2 className="mt-4 text-2xl font-black text-gray-900 tracking-tight">
           Đăng Nhập Tài Khoản
@@ -92,6 +91,18 @@ function LoginContent() {
             </Alert>
           )}
 
+          <GoogleSignInButton mode="signin" onAuthenticated={() => router.push(returnUrl)} />
+
+          {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
+            <div className="flex items-center gap-3" aria-hidden="true">
+              <div className="h-px flex-1 bg-gray-200" />
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                hoặc dùng mật khẩu
+              </span>
+              <div className="h-px flex-1 bg-gray-200" />
+            </div>
+          )}
+
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -107,17 +118,13 @@ function LoginContent() {
                 <Mail className="h-4 w-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
               {errors.email && (
-                <p className="mt-1 text-[11px] text-red-600 font-medium">
-                  {errors.email.message}
-                </p>
+                <p className="mt-1 text-[11px] text-red-600 font-medium">{errors.email.message}</p>
               )}
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold text-gray-700">
-                  Mật khẩu
-                </label>
+                <label className="block text-xs font-semibold text-gray-700">Mật khẩu</label>
                 <span className="text-[11px] text-primary-600 hover:underline cursor-pointer">
                   Quên mật khẩu?
                 </span>
@@ -149,31 +156,33 @@ function LoginContent() {
           </form>
 
           {/* Quick Login Test Accounts */}
-          <div className="pt-4 border-t border-gray-100 space-y-2">
-            <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider flex items-center space-x-1">
-              <KeyRound className="h-3.5 w-3.5 text-harvest-500" />
-              <span>Gợi ý tài khoản kiểm thử:</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => fillCredentials('farmer1@example.com', 'MatKhau@123')}
-                className="p-2 text-left border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-primary-50/50 transition-colors"
-              >
-                <div className="text-xs font-bold text-gray-800">Tài Khoản Nông Dân</div>
-                <div className="text-[10px] text-gray-500 truncate">farmer1@example.com</div>
-              </button>
+          {process.env.NODE_ENV === 'development' && (
+            <div className="pt-4 border-t border-gray-100 space-y-2">
+              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-wider flex items-center space-x-1">
+                <KeyRound className="h-3.5 w-3.5 text-harvest-500" />
+                <span>Gợi ý tài khoản kiểm thử:</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => fillCredentials('customer@local.test', 'Dev@Test123456')}
+                  className="p-2 text-left border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-primary-50/50 transition-colors"
+                >
+                  <div className="text-xs font-bold text-gray-800">Tài Khoản Nông Dân</div>
+                  <div className="text-[10px] text-gray-500 truncate">customer@local.test</div>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => fillCredentials('admin@local.test', 'Admin@123456')}
-                className="p-2 text-left border border-gray-200 rounded-lg hover:border-harvest-500 hover:bg-harvest-50/50 transition-colors"
-              >
-                <div className="text-xs font-bold text-gray-800">Quản Trị Hệ Thống</div>
-                <div className="text-[10px] text-gray-500 truncate">admin@local.test</div>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => fillCredentials('admin@local.test', 'Dev@Test123456')}
+                  className="p-2 text-left border border-gray-200 rounded-lg hover:border-harvest-500 hover:bg-harvest-50/50 transition-colors"
+                >
+                  <div className="text-xs font-bold text-gray-800">Quản Trị Hệ Thống</div>
+                  <div className="text-[10px] text-gray-500 truncate">admin@local.test</div>
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="text-center pt-2">
             <Link

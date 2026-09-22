@@ -132,6 +132,7 @@ Hệ thống được phân loại trạng thái triển khai dựa trên bằng
 | Nhóm Tính Năng | Mô Tả Nghiệp Vụ | Trạng Thái Thực Tế | Thành Phần Thực Thi |
 | :--- | :--- | :---: | :--- |
 | **Đăng Ký & Đăng Nhập** | Đăng ký tài khoản, đăng nhập email/mật khẩu, mã hóa bcrypt (cost 12), trả về cặp JWT Access/Refresh tokens | ✅ Implemented | `services/auth-service` |
+| **Đăng Nhập Bằng Gmail (Google Identity)** | Xác thực tài khoản Gmail thật qua Google Identity Services, xác minh ID token bằng `google-auth-library`, liên kết qua Google `sub` duy nhất, chống tạo tài khoản trùng lặp | ✅ Implemented | `services/auth-service` |
 | **Refresh Token Rotation** | Cấp mới Access Token khi hết hạn, thu hồi Refresh Token cũ (One-time use) | ✅ Implemented | `services/auth-service` |
 | **Phát Hiện Tái Sử Dụng Token** | Phát hiện token đã bị thu hồi và từ chối cấp phát tiếp với mã lỗi `401 Unauthorized` | ✅ Implemented | `services/auth-service` |
 | **Đăng Xuất Đa Thiết Bị** | Đăng xuất phiên hiện tại hoặc thu hồi toàn bộ session đăng nhập trên tất cả thiết bị | ✅ Implemented | `services/auth-service` |
@@ -144,8 +145,14 @@ Hệ thống được phân loại trạng thái triển khai dựa trên bằng
 | **Giỏ Hàng (Cart)** | Thêm, sửa, xóa số lượng món hàng, đồng bộ giỏ hàng theo User ID trong cơ sở dữ liệu | ✅ Implemented | `services/order-service` |
 | **Checkout Saga Orchestrator** | Điều phối giao dịch phân tán: chống giá giả, kiểm tra coupon, giữ kho, tạo đơn, tạo thanh toán, bồi hoàn tự động | ✅ Implemented | `services/order-service` |
 | **Xử Lý Bất Biến (Idempotency)** | Hỗ trợ header `Idempotency-Key` kết hợp bảng `idempotency_records` chống trừ tiền hoặc tạo đơn trùng lặp | ✅ Implemented | `services/order-service` |
-| **Thanh Toán COD** | Khởi tạo đơn hàng nhận tiền khi giao hàng, quản lý trạng thái thanh toán theo vòng đời đơn | ✅ Implemented | `services/order-service` |
+| **Thanh Toán COD** | Khởi tạo đơn hàng nhận tiền khi giao hàng, tự động chuyển `PAID` khi đơn `COMPLETED`, chặn `COMPLETED` nếu đơn online chưa thanh toán | ✅ Implemented | `services/order-service` |
 | **Thanh Toán Chuyển Khoản (VietQR)** | Sinh thông tin tài khoản ngân hàng và mã đối soát; cho phép quản trị viên đối soát sao kê và duyệt thủ công | ✅ Implemented | `services/order-service` |
+| **Bảo Vệ Thanh Toán Đơn Đã Hủy** | Chặn xác nhận thanh toán (`confirmPayment`) cho đơn hàng đã `CANCELLED`, `RETURNED`, `REFUNDED`; đồng bộ `paymentStatus = CANCELLED` khi hủy đơn | ✅ Implemented | `services/order-service` |
+| **Hoàn Trả Coupon Khi Hủy Đơn** | Tự động xóa `couponUsage` và giảm `usedCount` khi đơn hàng bị hủy hoặc hoàn tiền, trả lại lượt sử dụng mã giảm giá cho khách hàng | ✅ Implemented | `services/order-service` |
+| **Hoàn Kho Vật Lý Khi Trả Hàng** | Tự động nhập lại kho vật lý (`MovementType.RETURN`) khi đơn hàng chuyển sang `RETURNED`, cộng lại `stockQuantity` | ✅ Implemented | `services/order-service`, `services/inventory-service` |
+| **Đồng Bộ Hoàn Tiền (REFUNDED)** | Chặn hoàn tiền đơn chưa thanh toán, đồng bộ `paymentStatus = REFUNDED`, ghi vết `PaymentAuditLog`, hoàn trả coupon | ✅ Implemented | `services/order-service` |
+| **Chặn Hủy Đơn Đã Thanh Toán** | Ngăn khách hàng tự hủy đơn đã `PAID` qua API, cho phép Admin chuyển `CANCELLED → REFUNDED` để hoàn tiền an toàn | ✅ Implemented | `services/order-service` |
+| **Bồi Hoàn Xuất Kho Tự Động (Outbox)** | Khi xuất kho `commitInventory` gặp sự cố mạng, tự động tạo `CompensationTask` kiểu `COMMIT_INVENTORY` với retry `maxRetries: 60` | ✅ Implemented | `services/order-service` |
 | **Quản Lý Vòng Đời Đơn Hàng** | State machine kiểm soát chặt chẽ 11 trạng thái dịch chuyển của đơn hàng kèm lịch sử thay đổi | ✅ Implemented | `services/order-service` |
 | **Khóa Bi Quan Chống Oversell** | Dùng `SELECT ... FOR UPDATE` trong transaction khóa hàng độc quyền, tính `availableQuantity` | ✅ Implemented | `services/inventory-service` |
 | **Sổ Cái Biến Động Kho** | Ghi nhận chi tiết lịch sử nhập, xuất, tạm giữ, giải phóng và điều chỉnh kiểm kê thủ công | ✅ Implemented | `services/inventory-service` |
@@ -153,7 +160,8 @@ Hệ thống được phân loại trạng thái triển khai dựa trên bằng
 | **Hồ Sơ & Sổ Địa Chỉ** | Quản lý thông tin khách hàng, số điện thoại, sổ địa chỉ giao hàng và dữ liệu hành chính Tỉnh/Huyện/Xã VN | ✅ Implemented | `services/customer-service` |
 | **Bài Viết Nông Nghiệp & Banner** | Quản lý cẩm nang kỹ thuật bón phân, bài viết tin tức, banner quảng cáo khuyến mãi trên MinIO S3 | ✅ Implemented | `services/content-service` |
 | **Định Tuyến & Bảo Vệ Gateway** | Phân phối API, kiểm soát Rate Limiting, gán `x-request-id`, loại bỏ header giả mạo từ bên ngoài | ✅ Implemented | `apps/api-gateway` |
-| **Giao Diện Đặt Hàng Frontend** | Giỏ hàng dạng slide-out drawer đã hoàn thiện, nhưng trang Checkout kết nối với API đặt hàng chưa được dựng | 🟡 Partial | `apps/frontend` |
+| **Giao Diện Checkout Frontend** | Trang Checkout đầy đủ: chọn địa chỉ, phương thức thanh toán (COD/Chuyển khoản), áp dụng mã giảm giá, tính phí vận chuyển, đặt hàng với `Idempotency-Key` | ✅ Implemented | `apps/frontend` |
+| **Đăng Bán Sản Phẩm Mới (Admin)** | Modal form chuyên sâu phân bón: SKU tự sinh thông minh, đa quy cách đóng gói (Bao/Can/Chai), thuộc tính nông nghiệp, upload ảnh MinIO, tự động khởi tạo tồn kho ban đầu qua `POST /inventory/adjust` | ✅ Implemented | `apps/frontend`, `services/product-service`, `services/inventory-service` |
 | **Thu Hồi Giữ Kho Quá Hạn (TTL)** | API dọn dẹp đã sẵn sàng (`POST /internal/v1/inventory/cleanup-expired`), cần cron job định kỳ | 🟡 Partial | `services/inventory-service` |
 | **Cổng Thanh Toán Trực Tuyến** | VNPay, MoMo, ZaloPay, PayOS (Hiện mới chỉ có enum và kiến trúc adapter provider) | ⚪ Planned | `services/order-service` |
 | **Phân Tán Cache Với Redis** | Hạ tầng Redis 7 đã chạy container nhưng mã nguồn app chưa gọi lệnh cache | ⚪ Planned | Toàn hệ thống |
@@ -460,6 +468,7 @@ phanbonshop/
   * Đăng ký tài khoản khách hàng mới, kiểm tra trùng lặp email và số điện thoại.
   * Mã hóa mật khẩu một chiều bằng thuật toán `bcrypt` với cost factor 12.
   * Đăng nhập xác thực và cấp phát cặp token: Access Token (JWT thời hạn ngắn) và Refresh Token (JWT thời hạn 7 ngày).
+  * **Đăng nhập bằng Gmail thật (Google Identity Services)**: Xác minh ID token từ Google bằng thư viện chính thức `google-auth-library`, trích xuất `sub` (định danh Google duy nhất), liên kết tài khoản qua bảng `external_identities` (Prisma model). Chống tạo trùng tài khoản khi cùng một người dùng Google đăng nhập đồng thời hoặc nhiều lần. Hỗ trợ tự động tạo tài khoản mới nếu chưa tồn tại (auto-register).
   * Refresh Token Rotation: Lưu trữ SHA-256 hash của Refresh Token trong bảng `refresh_token_sessions`; khi refresh, thu hồi token cũ ngay lập tức và cấp cặp token mới.
   * Phát hiện tái sử dụng token (Reuse Detection): Từ chối các token đã có `revokedAt`.
   * Đăng xuất phiên hiện tại hoặc đăng xuất toàn bộ thiết bị (`logoutAll`).
@@ -837,6 +846,13 @@ stateDiagram-v2
 ### 17.9. Quản Trị Hệ Thống Toàn Diện
 * Đăng nhập trang Admin Portal bằng tài khoản có vai trò `STAFF`, `MANAGER`, `ADMIN` hoặc `SUPER_ADMIN`.
 * Cập nhật tồn kho, duyệt thanh toán, xuất bản bài viết cẩm nang và quản lý banner khuyến mãi theo mùa vụ.
+* **Đăng bán sản phẩm mới**: Admin sử dụng giao diện Modal chuyên sâu tại `/admin/san-pham` để tạo sản phẩm phân bón mới kèm đa quy cách đóng gói (Bao 25kg, Can 5L, Chai 1L...). Hệ thống tự động sinh mã SKU thông minh, tải ảnh sản phẩm lên MinIO S3, và kích hoạt `POST /inventory/adjust` để khởi tạo tồn kho ban đầu cho từng biến thể mà không cần thao tác thủ công trên module kho.
+* **Bảo vệ nghiệp vụ thanh toán & đơn hàng**:
+  * Chặn xác nhận thanh toán cho đơn hàng đã bị hủy hoặc hoàn trả.
+  * Tự động đồng bộ `paymentStatus` khi đơn hàng dịch chuyển trạng thái (`CANCELLED`, `REFUNDED`, `COMPLETED`).
+  * Tự động hoàn trả lượt sử dụng mã khuyến mãi khi đơn bị hủy hoặc hoàn tiền.
+  * Tự động nhập lại kho vật lý khi đơn hàng bị trả (`RETURNED`).
+  * Chặn khách hàng tự hủy đơn đã thanh toán, chỉ Admin mới có quyền chuyển `CANCELLED → REFUNDED`.
 
 ---
 
@@ -850,6 +866,7 @@ Bảng tổng hợp các API cốt lõi của hệ thống được trích xuấ
 | `GET` | `/ready` | API Gateway | Public | Mọi người | Kiểm tra readiness và uptime của Gateway |
 | `POST` | `/api/v1/auth/register` | `auth-service` | Public | Mọi người | Đăng ký tài khoản khách hàng mới |
 | `POST` | `/api/v1/auth/login` | `auth-service` | Public | Mọi người | Đăng nhập hệ thống, cấp Access & Refresh tokens |
+| `POST` | `/api/v1/auth/google` | `auth-service` | Public | Mọi người | Đăng nhập/đăng ký bằng Gmail thật qua Google Identity Services |
 | `POST` | `/api/v1/auth/refresh` | `auth-service` | Public | Mọi người | Cấp mới Access Token qua Refresh Token Rotation |
 | `POST` | `/api/v1/auth/logout` | `auth-service` | Public | Mọi người | Thu hồi Refresh Token phiên hiện tại |
 | `POST` | `/api/v1/auth/logout-all` | `auth-service` | JWT | Mọi user đã đăng nhập | Thu hồi toàn bộ phiên đăng nhập trên tất cả thiết bị |
@@ -904,6 +921,15 @@ Hệ thống triển khai mô hình bảo mật phân tầng theo chuẩn doanh 
 |        chống tấn công phát lại (Replay Attacks).                                      |
 |      - Lưu trữ bảo mật: Không bao giờ lưu plaintext Refresh Token; database chỉ lưu   |
 |        chuỗi băm SHA-256 (tokenHash).                                                 |
+|                                                                                       |
+|   1b. Xác thực Bên thứ ba (Google Identity Services):                                 |
+|      - Người dùng đăng nhập qua nút "Đăng nhập bằng Gmail" trên giao diện Next.js.   |
+|      - Frontend chuyển Google ID token (credential) về backend qua POST /auth/google.  |
+|      - Backend xác minh token bằng thư viện google-auth-library chính thức.            |
+|      - Trích xuất Google `sub` (định danh duy nhất) làm khóa liên kết ngoài.           |
+|      - Lưu liên kết tại bảng `external_identities` (provider, providerUserId, userId). |
+|      - Nếu tài khoản chưa tồn tại: tự động đăng ký (auto-register) với email Google. |
+|      - Nếu đã liên kết: đăng nhập trực tiếp, cấp cặp JWT Access/Refresh tokens.      |
 |                                                                                       |
 |   2. Phân Quyền Theo Vai Trò (Role-Based Access Control - RBAC):                      |
 |      - Sử dụng Custom Decorator `@Roles(...)` kết hợp NestJS `RolesGuard`.            |
@@ -1281,6 +1307,21 @@ Bảng tra cứu toàn bộ biến môi trường từ file chuẩn `.env.exampl
 | `JWT_ACCESS_SECRET` | *32+ ký tự ngẫu nhiên* | Có | Khóa bí mật ký Access Token |
 | `JWT_REFRESH_SECRET` | *32+ ký tự ngẫu nhiên* | Có | Khóa bí mật ký Refresh Token |
 | `INTERNAL_SERVICE_SECRET`| *Chuỗi bí mật hệ thống* | Có | Khóa chia sẻ xác thực giao tiếp giữa các dịch vụ nội bộ |
+| `GOOGLE_CLIENT_ID` | `...apps.googleusercontent.com` | Khi bật Google | Web OAuth Client ID dùng chung cho frontend và auth-service |
+| `REQUIRE_GOOGLE_REGISTRATION` | `false` local / `true` production | Có | Khóa đăng ký mật khẩu; khi có `GOOGLE_CLIENT_ID` chính sách này tự bật |
+
+### Cấu hình đăng nhập Gmail thật
+
+1. Trong Google Cloud Console, tạo OAuth Client loại **Web application**.
+2. Thêm JavaScript origin `http://localhost` cho local và origin HTTPS chính thức khi triển khai.
+3. Điền Client ID vào `GOOGLE_CLIENT_ID` trong `.env`; không cần và không được đưa Client Secret vào frontend.
+4. Dựng lại auth và frontend để Client ID public được nhúng vào bản build:
+
+```bash
+docker compose up -d --build auth frontend gateway reverse-proxy
+```
+
+Khi `GOOGLE_CLIENT_ID` có giá trị, hệ thống tự động khóa đăng ký bằng mật khẩu để hạn chế tài khoản ảo; các tài khoản mật khẩu đã tồn tại vẫn đăng nhập bình thường. Auth-service xác minh chữ ký, audience, issuer, hạn token và `email_verified`; Google credential không được lưu trong database.
 
 > [!WARNING]
 > Tuyệt đối không sử dụng các mật khẩu mặc định (ví dụ `admin123456`, `root_secret`, `phanbon_secret`) trên môi trường Production. Hệ thống sẽ tự động dừng khởi động (Fail-fast) nếu phát hiện các giá trị này khi `NODE_ENV=production`.

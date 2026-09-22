@@ -149,4 +149,570 @@ describe('Order Service Unit Tests', () => {
       );
     });
   });
+
+  describe('Order Cancellation & Coupon Rollback (TASK-BIZ-01)', () => {
+    test('Cancelling an order deletes CouponUsage and decrements coupon usedCount', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let deletedCouponUsageId = null;
+      let decrementedCouponId = null;
+      let updatedOrderStatus = null;
+      let updatedPaymentStatus = null;
+      let paymentRecordStatus = null;
+
+      const orderData = {
+        id: 'order-coupon-1',
+        orderNumber: 'DH-COUPON-001',
+        customerId: 'customer-1',
+        status: 'PENDING',
+        paymentStatus: 'PENDING',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockTx = {
+        paymentRecord: {
+          updateMany: async ({ data }) => {
+            paymentRecordStatus = data.status;
+            return { count: 1 };
+          },
+        },
+        paymentTransaction: {
+          updateMany: async () => ({ count: 1 }),
+        },
+        couponUsage: {
+          findMany: async ({ where }) => {
+            if (where.orderId === 'order-coupon-1') {
+              return [
+                {
+                  id: 'usage-1',
+                  couponId: 'coupon-50k',
+                  customerId: 'customer-1',
+                  orderId: 'order-coupon-1',
+                },
+              ];
+            }
+            return [];
+          },
+          delete: async ({ where }) => {
+            deletedCouponUsageId = where.id;
+            return {};
+          },
+        },
+        coupon: {
+          updateMany: async ({ where }) => {
+            if (where.id === 'coupon-50k') {
+              decrementedCouponId = where.id;
+            }
+            return { count: 1 };
+          },
+        },
+        order: {
+          update: async ({ data }) => {
+            updatedOrderStatus = data.status;
+            updatedPaymentStatus = data.paymentStatus;
+            return { ...orderData, ...data };
+          },
+        },
+        orderStatusHistory: {
+          create: async () => ({}),
+        },
+        auditLog: {
+          create: async () => ({}),
+        },
+      };
+
+      const mockPrisma = {
+        order: {
+          findFirst: async () => orderData,
+          findUnique: async () => orderData,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await ordersService.cancelOrder('order-coupon-1', 'customer-1', 'Đổi ý không mua nữa');
+
+      assert.strictEqual(updatedOrderStatus, 'CANCELLED');
+      assert.strictEqual(updatedPaymentStatus, 'CANCELLED');
+      assert.strictEqual(paymentRecordStatus, 'CANCELLED');
+      assert.strictEqual(deletedCouponUsageId, 'usage-1');
+      assert.strictEqual(decrementedCouponId, 'coupon-50k');
+    });
+  });
+
+  describe('Order Return & Inventory Restock (TASK-BIZ-02)', () => {
+    test('Updating status to RETURNED triggers releaseInventoryCompensation for restocking', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let compensationCalled = false;
+      let compensationReason = '';
+      let updatedOrderStatus = null;
+
+      const orderData = {
+        id: 'order-return-1',
+        orderNumber: 'DH-RETURN-001',
+        customerId: 'customer-1',
+        status: 'RETURN_REQUESTED',
+        paymentStatus: 'PAID',
+        reservationId: 'res-return-1',
+        items: [{ variantId: 'var-1' }],
+      };
+
+      const mockTx = {
+        order: {
+          update: async ({ data }) => {
+            updatedOrderStatus = data.status;
+            return { ...orderData, ...data };
+          },
+        },
+        orderStatusHistory: { create: async () => ({}) },
+        auditLog: { create: async () => ({}) },
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => orderData,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      ordersService.releaseInventoryCompensation = async (resId, reason) => {
+        compensationCalled = true;
+        compensationReason = reason;
+      };
+
+      await ordersService.updateStatus('order-return-1', 'RETURNED', 'STAFF', 'Khách hàng gửi trả hàng');
+
+      assert.strictEqual(updatedOrderStatus, 'RETURNED');
+      assert.strictEqual(compensationCalled, true);
+      assert.ok(compensationReason.includes('Khách trả hàng'));
+    });
+  });
+
+  describe('Order Refund & Payment Synchronization (TASK-BIZ-03)', () => {
+    test('Throws BadRequestException if attempting to REFUND an unpaid order', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      const unpaidOrder = {
+        id: 'order-unpaid-1',
+        orderNumber: 'DH-UNPAID-001',
+        customerId: 'customer-1',
+        status: 'RETURNED',
+        paymentStatus: 'PENDING',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => unpaidOrder,
+        },
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await ordersService.updateStatus('order-unpaid-1', 'REFUNDED', 'ADMIN', 'Hoàn tiền');
+        },
+        /Chỉ có thể hoàn tiền cho đơn hàng đã thanh toán thành công/,
+      );
+    });
+
+    test('Updating status to REFUNDED syncs paymentStatus, paymentRecords, auditLog and rolls back coupon', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let updatedOrderStatus = null;
+      let updatedPaymentStatus = null;
+      let paymentRecordStatus = null;
+      let paymentAuditLogEntry = null;
+      let deletedCouponUsageId = null;
+      let decrementedCouponId = null;
+
+      const paidOrder = {
+        id: 'order-refund-1',
+        orderNumber: 'DH-REFUND-001',
+        customerId: 'customer-1',
+        status: 'RETURNED',
+        paymentStatus: 'PAID',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockTx = {
+        paymentRecord: {
+          findMany: async () => [
+            { id: 'pr-1', orderId: 'order-refund-1', status: 'PAID', amount: 500000 },
+          ],
+          updateMany: async ({ data }) => {
+            paymentRecordStatus = data.status;
+            return { count: 1 };
+          },
+        },
+        paymentAuditLog: {
+          create: async ({ data }) => {
+            paymentAuditLogEntry = data;
+            return { id: 'pal-1', ...data };
+          },
+        },
+        couponUsage: {
+          findMany: async () => [
+            { id: 'cu-1', couponId: 'coupon-vip', customerId: 'customer-1', orderId: 'order-refund-1' },
+          ],
+          delete: async ({ where }) => {
+            deletedCouponUsageId = where.id;
+            return {};
+          },
+        },
+        coupon: {
+          updateMany: async ({ where }) => {
+            if (where.id === 'coupon-vip') decrementedCouponId = where.id;
+            return { count: 1 };
+          },
+        },
+        order: {
+          update: async ({ data }) => {
+            updatedOrderStatus = data.status;
+            updatedPaymentStatus = data.paymentStatus;
+            return { ...paidOrder, ...data };
+          },
+        },
+        orderStatusHistory: { create: async () => ({}) },
+        auditLog: { create: async () => ({}) },
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => paidOrder,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await ordersService.updateStatus('order-refund-1', 'REFUNDED', 'ADMIN', 'Hoàn tiền cho khách qua ngân hàng');
+
+      assert.strictEqual(updatedOrderStatus, 'REFUNDED');
+      assert.strictEqual(updatedPaymentStatus, 'REFUNDED');
+      assert.strictEqual(paymentRecordStatus, 'REFUNDED');
+      assert.strictEqual(paymentAuditLogEntry.action, 'REFUND');
+      assert.strictEqual(paymentAuditLogEntry.paymentId, 'pr-1');
+      assert.strictEqual(deletedCouponUsageId, 'cu-1');
+      assert.strictEqual(decrementedCouponId, 'coupon-vip');
+    });
+  });
+
+  describe('Order Completion & COD Payment Auto-Resolution (TASK-BIZ-04)', () => {
+    test('Blocks transitioning unpaid non-COD order to COMPLETED', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      const unpaidBankOrder = {
+        id: 'order-bank-1',
+        orderNumber: 'DH-BANK-001',
+        customerId: 'customer-1',
+        status: 'DELIVERED',
+        paymentMethod: 'BANK_TRANSFER',
+        paymentStatus: 'PENDING',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => unpaidBankOrder,
+        },
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await ordersService.updateStatus('order-bank-1', 'COMPLETED', 'STAFF');
+        },
+        /Không thể hoàn tất đơn hàng thanh toán qua "BANK_TRANSFER" khi chưa thanh toán thành công/,
+      );
+    });
+
+    test('Auto-marks COD order as PAID upon transition to COMPLETED', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let updatedOrderStatus = null;
+      let updatedPaymentStatus = null;
+      let paymentRecordStatus = null;
+      let paymentTxData = null;
+      let paymentAuditLogEntry = null;
+
+      const codOrder = {
+        id: 'order-cod-1',
+        orderNumber: 'DH-COD-001',
+        customerId: 'customer-1',
+        status: 'DELIVERED',
+        paymentMethod: 'COD',
+        paymentStatus: 'PENDING',
+        totalAmount: 350000,
+        reservationId: null,
+        items: [],
+      };
+
+      const mockTx = {
+        paymentRecord: {
+          findFirst: async () => ({ id: 'pr-cod-1', orderId: 'order-cod-1', status: 'PENDING' }),
+          findMany: async () => [],
+          updateMany: async ({ data }) => {
+            paymentRecordStatus = data.status;
+            return { count: 1 };
+          },
+        },
+        paymentTransaction: {
+          create: async ({ data }) => {
+            paymentTxData = data;
+            return { id: 'pt-cod-1', ...data };
+          },
+        },
+        paymentAuditLog: {
+          create: async ({ data }) => {
+            paymentAuditLogEntry = data;
+            return { id: 'pal-cod-1', ...data };
+          },
+        },
+        couponUsage: {
+          findMany: async () => [],
+        },
+        order: {
+          update: async ({ data }) => {
+            updatedOrderStatus = data.status;
+            updatedPaymentStatus = data.paymentStatus;
+            return { ...codOrder, ...data };
+          },
+        },
+        orderStatusHistory: { create: async () => ({}) },
+        auditLog: { create: async () => ({}) },
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => codOrder,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await ordersService.updateStatus('order-cod-1', 'COMPLETED', 'STAFF', 'Khách đã nhận hàng và thanh toán tiền mặt');
+
+      assert.strictEqual(updatedOrderStatus, 'COMPLETED');
+      assert.strictEqual(updatedPaymentStatus, 'PAID');
+      assert.strictEqual(paymentRecordStatus, 'PAID');
+      assert.strictEqual(paymentTxData.status, 'SUCCESS');
+      assert.strictEqual(paymentTxData.provider, 'COD');
+      assert.strictEqual(paymentAuditLogEntry.action, 'PAID');
+      assert.strictEqual(paymentAuditLogEntry.paymentId, 'pr-cod-1');
+    });
+  });
+
+  describe('Commit Inventory Compensation Fallback (TASK-BIZ-05)', () => {
+    test('Creates COMMIT_INVENTORY CompensationTask when HTTP commit fails', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let compensationTaskCreated = null;
+
+      const confirmedOrder = {
+        id: 'order-commit-fail-1',
+        orderNumber: 'DH-COMMIT-FAIL-001',
+        customerId: 'customer-1',
+        status: 'PENDING',
+        paymentStatus: 'PAID',
+        reservationId: 'res-commit-1',
+        items: [{ variantId: 'var-1' }],
+      };
+
+      const mockCompensationService = {
+        createTask: async (type, payload, options) => {
+          compensationTaskCreated = { type, payload, options };
+          return { id: 'task-1' };
+        },
+      };
+
+      const mockTx = {
+        paymentRecord: {
+          findMany: async () => [],
+        },
+        couponUsage: {
+          findMany: async () => [],
+        },
+        order: {
+          update: async ({ data }) => ({ ...confirmedOrder, ...data }),
+        },
+        orderStatusHistory: { create: async () => ({}) },
+        auditLog: { create: async () => ({}) },
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => confirmedOrder,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url) => {
+        if (typeof url === 'string' && url.includes('/internal/v1/inventory/commit')) {
+          return {
+            ok: false,
+            status: 503,
+            text: async () => 'Service Unavailable',
+          };
+        }
+        return originalFetch(url);
+      };
+
+      try {
+        const ordersService = new OrdersService(mockPrisma, mockCompensationService);
+        await ordersService.updateStatus('order-commit-fail-1', 'CONFIRMED', 'STAFF');
+
+        assert.ok(compensationTaskCreated, 'Expected CompensationTask to be created');
+        assert.strictEqual(compensationTaskCreated.type, 'COMMIT_INVENTORY');
+        assert.strictEqual(compensationTaskCreated.payload.reservationId, 'res-commit-1-var-1');
+        assert.strictEqual(compensationTaskCreated.payload.referenceId, 'DH-COMMIT-FAIL-001');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('Paid Order Cancellation & Refund Transition (TASK-BIZ-06)', () => {
+    test('Rejects customer self-cancelling an order that has already been PAID', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      const paidOrder = {
+        id: 'order-paid-cust-1',
+        orderNumber: 'DH-PAID-CUST-001',
+        customerId: 'customer-1',
+        status: 'CONFIRMED',
+        paymentStatus: 'PAID',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockPrisma = {
+        order: {
+          findFirst: async () => paidOrder,
+          findUnique: async () => paidOrder,
+        },
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await ordersService.cancelOrder('order-paid-cust-1', 'customer-1', 'Tôi muốn hủy đơn');
+        },
+        /Đơn hàng đã được thanh toán thành công. Quý khách vui lòng liên hệ hotline/,
+      );
+    });
+
+    test('Allows Admin to transition CANCELLED order to REFUNDED when PAID', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      let updatedOrderStatus = null;
+      let updatedPaymentStatus = null;
+      let paymentRecordStatus = null;
+      let paymentAuditLogAction = null;
+
+      const cancelledPaidOrder = {
+        id: 'order-cancelled-paid-1',
+        orderNumber: 'DH-CANCEL-PAID-001',
+        customerId: 'customer-1',
+        status: 'CANCELLED',
+        paymentStatus: 'PAID',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockTx = {
+        paymentRecord: {
+          findMany: async () => [
+            { id: 'pr-cancelled-1', orderId: 'order-cancelled-paid-1', status: 'PAID', amount: 450000 },
+          ],
+          updateMany: async ({ data }) => {
+            paymentRecordStatus = data.status;
+            return { count: 1 };
+          },
+        },
+        paymentAuditLog: {
+          create: async ({ data }) => {
+            paymentAuditLogAction = data.action;
+            return { id: 'pal-cancelled-1', ...data };
+          },
+        },
+        couponUsage: {
+          findMany: async () => [],
+        },
+        order: {
+          update: async ({ data }) => {
+            updatedOrderStatus = data.status;
+            updatedPaymentStatus = data.paymentStatus;
+            return { ...cancelledPaidOrder, ...data };
+          },
+        },
+        orderStatusHistory: { create: async () => ({}) },
+        auditLog: { create: async () => ({}) },
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => cancelledPaidOrder,
+        },
+        $transaction: async (cb) => cb(mockTx),
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await ordersService.updateStatus(
+        'order-cancelled-paid-1',
+        'REFUNDED',
+        'ADMIN',
+        'Đã chuyển khoản hoàn tiền cho khách',
+      );
+
+      assert.strictEqual(updatedOrderStatus, 'REFUNDED');
+      assert.strictEqual(updatedPaymentStatus, 'REFUNDED');
+      assert.strictEqual(paymentRecordStatus, 'REFUNDED');
+      assert.strictEqual(paymentAuditLogAction, 'REFUND');
+    });
+
+    test('Rejects transitioning CANCELLED order to REFUNDED when unpaid', async () => {
+      process.env.INTERNAL_SERVICE_SECRET = 'test-internal-secret-for-orders-service';
+      const { OrdersService } = await import('../dist/orders/orders.service.js');
+
+      const cancelledUnpaidOrder = {
+        id: 'order-cancelled-unpaid-1',
+        orderNumber: 'DH-CANCEL-UNPAID-001',
+        customerId: 'customer-1',
+        status: 'CANCELLED',
+        paymentStatus: 'CANCELLED',
+        reservationId: null,
+        items: [],
+      };
+
+      const mockPrisma = {
+        order: {
+          findUnique: async () => cancelledUnpaidOrder,
+        },
+      };
+
+      const ordersService = new OrdersService(mockPrisma);
+      await assert.rejects(
+        async () => {
+          await ordersService.updateStatus('order-cancelled-unpaid-1', 'REFUNDED', 'ADMIN');
+        },
+        /Chỉ có thể hoàn tiền cho đơn hàng đã thanh toán thành công/,
+      );
+    });
+  });
 });

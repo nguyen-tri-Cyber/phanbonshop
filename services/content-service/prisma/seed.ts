@@ -29,7 +29,7 @@ async function main(): Promise<void> {
   await prisma.banner.createMany({
     data: [
       {
-        title: 'Ưu Đãi Vụ Mùa 2026 — Miễn Phí Vận Chuyển Đơn Hàng Từ 1.000.000đ',
+        title: 'Ưu Đãi Vụ Mùa 2026 — Miễn Phí Vận Chuyển Đơn Hàng Từ 2.000.000đ',
         imageUrl: 'http://localhost:9000/content-images/banners/banner-hero-1.webp',
         targetUrl: '/san-pham',
         position: 'HOME_HERO',

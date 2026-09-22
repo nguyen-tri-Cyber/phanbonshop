@@ -9,6 +9,8 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import {
   OrderStatus,
   PaymentStatus,
+  PaymentMethod,
+  PaymentTransactionStatus,
   Prisma,
   CompensationTaskType,
 } from '../../generated/client/index.js';
@@ -27,9 +29,9 @@ const ALLOWED_STATE_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED, OrderStatus.RETURN_REQUESTED],
   [OrderStatus.DELIVERED]: [OrderStatus.COMPLETED, OrderStatus.RETURN_REQUESTED],
   [OrderStatus.RETURN_REQUESTED]: [OrderStatus.RETURNED, OrderStatus.COMPLETED],
-  [OrderStatus.RETURNED]: [OrderStatus.REFUNDED],
+  [OrderStatus.RETURNED]: [OrderStatus.REFUNDED, OrderStatus.CANCELLED],
   [OrderStatus.COMPLETED]: [],
-  [OrderStatus.CANCELLED]: [],
+  [OrderStatus.CANCELLED]: [OrderStatus.REFUNDED],
   [OrderStatus.REFUNDED]: [],
 };
 
@@ -179,13 +181,40 @@ export class OrdersService {
       );
     }
 
-    // Nếu chuyển sang CANCELLED: Kích hoạt Compensation release tồn kho cho từng variant
-    if (toStatus === OrderStatus.CANCELLED && order.reservationId) {
+    // Kiểm tra điều kiện hoàn tiền: Chỉ cho phép khi đơn hàng đã thanh toán
+    if (toStatus === OrderStatus.REFUNDED) {
+      if (
+        order.paymentStatus !== PaymentStatus.PAID &&
+        order.paymentStatus !== PaymentStatus.PARTIALLY_REFUNDED
+      ) {
+        throw new BadRequestException(
+          `Chỉ có thể hoàn tiền cho đơn hàng đã thanh toán thành công (trạng thái thanh toán hiện tại là "${order.paymentStatus}"). Đối với đơn chưa thanh toán, vui lòng chọn Hủy đơn hàng.`,
+        );
+      }
+    }
+
+    // Kiểm tra điều kiện hoàn thành: Đơn không phải COD bắt buộc phải thanh toán thành công trước khi hoàn tất
+    if (toStatus === OrderStatus.COMPLETED) {
+      if (
+        order.paymentMethod !== PaymentMethod.COD &&
+        order.paymentStatus !== PaymentStatus.PAID
+      ) {
+        throw new BadRequestException(
+          `Không thể hoàn tất đơn hàng thanh toán qua "${order.paymentMethod}" khi chưa thanh toán thành công (paymentStatus must be PAID).`,
+        );
+      }
+    }
+
+    // Nếu chuyển sang CANCELLED hoặc RETURNED: Kích hoạt hoàn trả tồn kho cho từng variant
+    if ((toStatus === OrderStatus.CANCELLED || toStatus === OrderStatus.RETURNED) && order.reservationId) {
       for (const item of order.items) {
         const itemReservationId = `${order.reservationId}-${item.variantId}`;
+        const reason = toStatus === OrderStatus.RETURNED
+          ? `Khách trả hàng đơn ${order.orderNumber}: ${note || 'Hoàn trả nhập lại kho'}`
+          : `Đơn hàng ${order.orderNumber} bị hủy: ${note || 'Hủy đơn'}`;
         await this.releaseInventoryCompensation(
           itemReservationId,
-          `Đơn hàng ${order.orderNumber} bị hủy: ${note || 'Hủy đơn'}`,
+          reason,
         );
       }
     }
@@ -214,9 +243,157 @@ export class OrdersService {
 
     // Cập nhật database với transaction cục bộ
     return this.prisma.$transaction(async (tx) => {
+      const isCancelled = toStatus === OrderStatus.CANCELLED;
+      const isRefunded = toStatus === OrderStatus.REFUNDED;
+      const isCompleted = toStatus === OrderStatus.COMPLETED;
+      const shouldCancelPayment =
+        isCancelled &&
+        order.paymentStatus !== PaymentStatus.PAID &&
+        order.paymentStatus !== PaymentStatus.REFUNDED;
+      const shouldRefundPayment = isRefunded;
+      const shouldMarkCodPaid =
+        isCompleted &&
+        order.paymentMethod === PaymentMethod.COD &&
+        order.paymentStatus !== PaymentStatus.PAID;
+
+      if (isCancelled) {
+        await tx.paymentRecord.updateMany({
+          where: {
+            orderId,
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+          },
+          data: {
+            status: PaymentStatus.CANCELLED,
+          },
+        });
+
+        await tx.paymentTransaction.updateMany({
+          where: {
+            orderId,
+            status: 'PENDING',
+          },
+          data: {
+            status: 'FAILED',
+          },
+        });
+      }
+
+      if (isRefunded) {
+        const paidPayments = await tx.paymentRecord.findMany({
+          where: {
+            orderId,
+            status: { in: [PaymentStatus.PAID, PaymentStatus.PARTIALLY_REFUNDED] },
+          },
+        });
+
+        await tx.paymentRecord.updateMany({
+          where: {
+            orderId,
+            status: { in: [PaymentStatus.PAID, PaymentStatus.PARTIALLY_REFUNDED] },
+          },
+          data: {
+            status: PaymentStatus.REFUNDED,
+          },
+        });
+
+        for (const p of paidPayments) {
+          await tx.paymentAuditLog.create({
+            data: {
+              paymentId: p.id,
+              action: 'REFUND',
+              actorId: changedBy || 'ADMIN',
+              actorRole: 'ADMIN',
+              amount: p.amount,
+              note: note || `Hoàn tiền toàn phần cho đơn hàng ${order.orderNumber}`,
+            },
+          });
+        }
+      }
+
+      // Tự động xác nhận thanh toán cho đơn COD khi hoàn tất giao hàng (COMPLETED)
+      if (shouldMarkCodPaid) {
+        const pendingPaymentRecord = await tx.paymentRecord.findFirst({
+          where: {
+            orderId,
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+          },
+        });
+
+        await tx.paymentRecord.updateMany({
+          where: {
+            orderId,
+            status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] },
+          },
+          data: {
+            status: PaymentStatus.PAID,
+            paidAt: new Date(),
+          },
+        });
+
+        await tx.paymentTransaction.create({
+          data: {
+            orderId,
+            paymentRecordId: pendingPaymentRecord?.id || null,
+            provider: 'COD',
+            method: PaymentMethod.COD,
+            amount: order.totalAmount,
+            status: PaymentTransactionStatus.SUCCESS,
+            transactionId: `COD-${order.orderNumber}`,
+            paidAt: new Date(),
+          },
+        });
+
+        if (pendingPaymentRecord) {
+          await tx.paymentAuditLog.create({
+            data: {
+              paymentId: pendingPaymentRecord.id,
+              action: 'PAID',
+              actorId: changedBy || 'SYSTEM',
+              actorRole:
+                changedBy === 'STAFF' || changedBy === 'ADMIN' ? changedBy : 'SYSTEM',
+              amount: order.totalAmount,
+              note:
+                note ||
+                `Tự động xác nhận thu tiền COD khi hoàn tất đơn hàng ${order.orderNumber}`,
+            },
+          });
+        }
+
+        logger.info(
+          `Đã tự động xác nhận thu tiền COD cho đơn hàng ${order.orderNumber} khi chuyển trạng thái sang COMPLETED`,
+        );
+      }
+
+      // Hoàn trả lượt sử dụng Coupon nếu đơn hàng có áp dụng mã khuyến mãi (khi Hủy hoặc Hoàn tiền)
+      if (isCancelled || isRefunded) {
+        const couponUsages = await tx.couponUsage.findMany({
+          where: { orderId },
+        });
+
+        for (const usage of couponUsages) {
+          await tx.couponUsage.delete({
+            where: { id: usage.id },
+          });
+
+          await tx.coupon.updateMany({
+            where: { id: usage.couponId, usedCount: { gt: 0 } },
+            data: { usedCount: { decrement: 1 } },
+          });
+
+          logger.info(
+            `Đã hoàn trả lượt sử dụng coupon ${usage.couponId} cho khách hàng ${usage.customerId} sau khi ${isCancelled ? 'hủy' : 'hoàn tiền'} đơn hàng ${order.orderNumber}`,
+          );
+        }
+      }
+
       const updatedOrder = await tx.order.update({
         where: { id: orderId },
-        data: { status: toStatus },
+        data: {
+          status: toStatus,
+          ...(shouldCancelPayment ? { paymentStatus: PaymentStatus.CANCELLED } : {}),
+          ...(shouldRefundPayment ? { paymentStatus: PaymentStatus.REFUNDED } : {}),
+          ...(shouldMarkCodPaid ? { paymentStatus: PaymentStatus.PAID } : {}),
+        },
         include: {
           items: true,
           shippingAddress: true,
@@ -243,8 +420,18 @@ export class OrdersService {
             action: 'ORDER_STATUS_CHANGE',
             entityType: 'ORDER',
             entityId: orderId,
-            oldValue: JSON.stringify({ status: currentStatus }),
-            newValue: JSON.stringify({ status: toStatus, note }),
+            oldValue: JSON.stringify({ status: currentStatus, paymentStatus: order.paymentStatus }),
+            newValue: JSON.stringify({
+              status: toStatus,
+              paymentStatus: shouldRefundPayment
+                ? PaymentStatus.REFUNDED
+                : shouldCancelPayment
+                ? PaymentStatus.CANCELLED
+                : shouldMarkCodPaid
+                ? PaymentStatus.PAID
+                : order.paymentStatus,
+              note,
+            }),
             ipAddress: null,
             requestId: null,
           },
@@ -275,6 +462,13 @@ export class OrdersService {
     if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.CONFIRMED) {
       throw new BadRequestException(
         `Không thể hủy đơn hàng ở trạng thái "${order.status}". Vui lòng liên hệ hotline hỗ trợ.`,
+      );
+    }
+
+    // Chặn khách hàng tự hủy đơn hàng đã thanh toán thành công
+    if (customerId && order.paymentStatus === PaymentStatus.PAID) {
+      throw new BadRequestException(
+        'Đơn hàng đã được thanh toán thành công. Quý khách vui lòng liên hệ hotline hỗ trợ để được tiếp nhận yêu cầu hủy và xử lý hoàn tiền.',
       );
     }
 
@@ -615,6 +809,7 @@ export class OrdersService {
     reservationId: string,
     orderNumber: string,
   ): Promise<void> {
+    let success = false;
     try {
       logger.info(`Kích hoạt xuất kho vật lý cho reservationId: ${reservationId}`);
       const res = await fetch(`${this.inventoryServiceUrl}/internal/v1/inventory/commit`, {
@@ -634,9 +829,29 @@ export class OrdersService {
         logger.error(`Lỗi xuất kho: ${res.status} - ${text}`);
       } else {
         logger.info(`Đã xuất kho thành công cho reservationId: ${reservationId}`);
+        success = true;
       }
     } catch (err) {
       logger.error('Không thể kết nối inventory-service để xuất kho:', err);
+    }
+
+    if (!success && this.compensationService) {
+      try {
+        await this.compensationService.createTask(
+          CompensationTaskType.COMMIT_INVENTORY,
+          {
+            reservationId,
+            referenceId: orderNumber,
+            requestId: `commit-${crypto.randomUUID().slice(0, 8)}`,
+          },
+          { maxRetries: 60 },
+        );
+        logger.warn(
+          `Đã tạo CompensationTask (COMMIT_INVENTORY) để retry xuất kho cho reservationId: ${reservationId}`,
+        );
+      } catch (taskErr) {
+        logger.error('Không thể tạo CompensationTask khi commit kho thất bại:', taskErr);
+      }
     }
   }
 

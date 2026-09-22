@@ -1,13 +1,6 @@
 'use client';
 
-import React, {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-} from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { CartItem, Cart } from '../types/index';
 import { useAuth } from './auth-context';
 import { apiClient } from '../lib/api-client';
@@ -26,10 +19,7 @@ interface CartContextType {
   addItem: (item: CartItem) => Promise<void>;
   removeItem: (variantId: string) => Promise<void>;
   updateQuantity: (variantId: string, quantity: number) => Promise<void>;
-  changeVariant: (
-    oldVariantId: string,
-    newVariant: ChangeVariantParams,
-  ) => Promise<void>;
+  changeVariant: (oldVariantId: string, newVariant: ChangeVariantParams) => Promise<void>;
   clearCart: () => Promise<void>;
   refreshCart: () => Promise<void>;
   totalItems: number;
@@ -37,6 +27,7 @@ interface CartContextType {
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
   isLoading: boolean;
+  error: string | null;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -46,12 +37,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hydratedOwner, setHydratedOwner] = useState<string | null | undefined>(undefined);
 
-  const prevUserRef = useRef<string | null>(null);
+  const prevUserRef = useRef<string | null | undefined>(undefined);
 
   // Sync / Load cart depending on auth state
   const loadCart = useCallback(async () => {
     if (isAuthLoading) return;
+    setError(null);
 
     if (user) {
       setIsLoading(true);
@@ -87,12 +81,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             }),
           });
 
-          // Xóa guest cart sau khi merge
-          localStorage.removeItem('phanbon_cart');
-
           if (mergeRes.success && mergeRes.data) {
+            localStorage.removeItem('phanbon_cart');
             setItems(mergeRes.data.items || []);
           } else {
+            setError(
+              !mergeRes.success
+                ? mergeRes.error.message
+                : 'Không thể đồng bộ giỏ hàng. Vui lòng thử lại.',
+            );
             // Fallback load regular cart
             const res = await apiClient<Cart>('/cart', { requireAuth: true });
             if (res.success && res.data) {
@@ -110,6 +107,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         console.error('Failed to load authenticated cart:', err);
       } finally {
         setIsLoading(false);
+        setHydratedOwner(user.id);
       }
     } else {
       // Guest mode
@@ -123,28 +121,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       } catch {
         setItems([]);
       }
+      setHydratedOwner(null);
     }
   }, [user, isAuthLoading]);
 
   // Effect chạy khi user thay đổi trạng thái (login/logout/mount)
   useEffect(() => {
+    if (isAuthLoading) return;
     const currentUserId = user ? user.id : null;
     if (prevUserRef.current !== currentUserId) {
       prevUserRef.current = currentUserId;
       loadCart();
     }
-  }, [user, loadCart]);
+  }, [user, isAuthLoading, loadCart]);
 
   // Lưu vào localStorage khi items thay đổi VÀ đang ở chế độ GUEST
   useEffect(() => {
-    if (!isAuthLoading && !user) {
+    if (!isAuthLoading && !user && hydratedOwner === null) {
       try {
         localStorage.setItem('phanbon_cart', JSON.stringify(items));
       } catch {
         // Ignore
       }
     }
-  }, [items, user, isAuthLoading]);
+  }, [items, user, isAuthLoading, hydratedOwner]);
 
   const addItem = async (item: CartItem) => {
     const clampedQty = Math.min(Math.max(1, item.quantity), MAX_ITEM_QUANTITY);
@@ -181,9 +181,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         const existing = prev.find((i) => i.variantId === item.variantId);
         if (existing) {
           const newQty = Math.min(existing.quantity + clampedQty, MAX_ITEM_QUANTITY);
-          return prev.map((i) =>
-            i.variantId === item.variantId ? { ...i, quantity: newQty } : i,
-          );
+          return prev.map((i) => (i.variantId === item.variantId ? { ...i, quantity: newQty } : i));
         }
         return [...prev, { ...item, quantity: clampedQty }];
       });
@@ -238,17 +236,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
     } else {
       setItems((prev) =>
-        prev.map((i) =>
-          i.variantId === variantId ? { ...i, quantity: clampedQty } : i,
-        ),
+        prev.map((i) => (i.variantId === variantId ? { ...i, quantity: clampedQty } : i)),
       );
     }
   };
 
-  const changeVariant = async (
-    oldVariantId: string,
-    newVariant: ChangeVariantParams,
-  ) => {
+  const changeVariant = async (oldVariantId: string, newVariant: ChangeVariantParams) => {
     if (oldVariantId === newVariant.variantId) return;
 
     if (user) {
@@ -281,17 +274,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         const existingNew = prev.find((i) => i.variantId === newVariant.variantId);
         if (existingNew) {
           // Merge quantities up to 99
-          const mergedQty = Math.min(
-            existingNew.quantity + oldItem.quantity,
-            MAX_ITEM_QUANTITY,
-          );
+          const mergedQty = Math.min(existingNew.quantity + oldItem.quantity, MAX_ITEM_QUANTITY);
           return prev
             .filter((i) => i.variantId !== oldVariantId)
-            .map((i) =>
-              i.variantId === newVariant.variantId
-                ? { ...i, quantity: mergedQty }
-                : i,
-            );
+            .map((i) => (i.variantId === newVariant.variantId ? { ...i, quantity: mergedQty } : i));
         } else {
           return prev.map((i) =>
             i.variantId === oldVariantId
@@ -338,10 +324,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const totalItems = items.reduce((acc, item) => acc + item.quantity, 0);
-  const totalPrice = items.reduce(
-    (acc, item) => acc + item.price * item.quantity,
-    0,
-  );
+  const totalPrice = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
 
   return (
     <CartContext.Provider
@@ -358,6 +341,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         isOpen,
         setIsOpen,
         isLoading,
+        error,
       }}
     >
       {children}

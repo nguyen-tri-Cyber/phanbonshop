@@ -14,10 +14,12 @@ import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/reset-password.dto.js';
-import { Role, UserStatus, User } from '../../generated/client/index.js';
+import { GoogleLoginDto } from './dto/google-login.dto.js';
+import { IdentityProvider, Role, UserStatus, User } from '../../generated/client/index.js';
 import { getEnvString } from '@phanbonshop/config';
 import { EmailService } from '../email/email.service.js';
 import { createLogger } from '@phanbonshop/logger';
+import { GoogleIdentityVerifier } from '../google/google-identity.verifier.js';
 
 const logger = createLogger('auth-service:auth');
 
@@ -52,6 +54,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly emailService: EmailService,
+    private readonly googleIdentityVerifier: GoogleIdentityVerifier,
   ) {
     this.jwtAccessSecret = getEnvString('JWT_ACCESS_SECRET');
     this.jwtRefreshSecret = getEnvString('JWT_REFRESH_SECRET');
@@ -142,7 +145,18 @@ export class AuthService {
   }
 
   // 3. Đăng ký tài khoản (Mặc định CUSTOMER)
-  async register(dto: RegisterDto, ipAddress?: string, deviceInfo?: string): Promise<{ user: UserResponse } & TokenResult> {
+  async register(
+    dto: RegisterDto,
+    ipAddress?: string,
+    deviceInfo?: string,
+  ): Promise<{ user: UserResponse } & TokenResult> {
+    const hasGoogleIdentity = Boolean(process.env.GOOGLE_CLIENT_ID?.trim());
+    if (hasGoogleIdentity || process.env.REQUIRE_GOOGLE_REGISTRATION === 'true') {
+      throw new ForbiddenException(
+        'Đăng ký bằng email và mật khẩu đã tạm khóa. Vui lòng xác minh bằng tài khoản Gmail.',
+      );
+    }
+
     const existing = await this.prisma.user.findFirst({
       where: {
         OR: [
@@ -180,7 +194,11 @@ export class AuthService {
   }
 
   // 4. Đăng nhập
-  async login(dto: LoginDto, ipAddress?: string, deviceInfo?: string): Promise<{ user: UserResponse } & TokenResult> {
+  async login(
+    dto: LoginDto,
+    ipAddress?: string,
+    deviceInfo?: string,
+  ): Promise<{ user: UserResponse } & TokenResult> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase().trim() },
     });
@@ -189,13 +207,19 @@ export class AuthService {
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
+    if (!user.passwordHash) {
+      throw new UnauthorizedException('Tài khoản này sử dụng đăng nhập Google');
+    }
+
     const isMatch = await this.comparePassword(dto.password, user.passwordHash);
     if (!isMatch) {
       throw new UnauthorizedException('Email hoặc mật khẩu không chính xác');
     }
 
     if (user.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException(`Tài khoản hiện đang ở trạng thái ${user.status}, vui lòng liên hệ hỗ trợ`);
+      throw new ForbiddenException(
+        `Tài khoản hiện đang ở trạng thái ${user.status}, vui lòng liên hệ hỗ trợ`,
+      );
     }
 
     await this.prisma.user.update({
@@ -211,8 +235,112 @@ export class AuthService {
     };
   }
 
+  async loginWithGoogle(
+    dto: GoogleLoginDto,
+    ipAddress?: string,
+    deviceInfo?: string,
+  ): Promise<{ user: UserResponse } & TokenResult> {
+    const identity = await this.googleIdentityVerifier.verify(dto.credential);
+    let user = await this.findUserByGoogleSubject(identity.subject);
+
+    if (!user) {
+      try {
+        user = await this.prisma.$transaction(async (tx) => {
+          const existingIdentity = await tx.externalIdentity.findUnique({
+            where: {
+              provider_providerSubject: {
+                provider: IdentityProvider.GOOGLE,
+                providerSubject: identity.subject,
+              },
+            },
+            include: { user: true },
+          });
+          if (existingIdentity) return existingIdentity.user;
+
+          let resolvedUser = await tx.user.findUnique({ where: { email: identity.email } });
+          if (resolvedUser) {
+            if (resolvedUser.role !== Role.CUSTOMER) {
+              throw new ForbiddenException(
+                'Tài khoản nhân viên hoặc quản trị không được tự động liên kết Google',
+              );
+            }
+            resolvedUser = await tx.user.update({
+              where: { id: resolvedUser.id },
+              data: { emailVerifiedAt: resolvedUser.emailVerifiedAt || new Date() },
+            });
+          } else {
+            resolvedUser = await tx.user.create({
+              data: {
+                email: identity.email,
+                passwordHash: null,
+                fullName: identity.fullName,
+                role: Role.CUSTOMER,
+                status: UserStatus.ACTIVE,
+                emailVerifiedAt: new Date(),
+              },
+            });
+          }
+
+          await tx.externalIdentity.create({
+            data: {
+              userId: resolvedUser.id,
+              provider: IdentityProvider.GOOGLE,
+              providerSubject: identity.subject,
+              providerEmail: identity.email,
+              displayName: identity.fullName,
+              avatarUrl: identity.avatarUrl,
+            },
+          });
+          return resolvedUser;
+        });
+      } catch (error: unknown) {
+        if (!this.isUniqueConstraintError(error)) throw error;
+        user = await this.findUserByGoogleSubject(identity.subject);
+        if (!user) throw error;
+      }
+    }
+
+    if (user.role !== Role.CUSTOMER) {
+      throw new ForbiddenException(
+        'Tài khoản nhân viên hoặc quản trị không được đăng nhập qua Google',
+      );
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Tài khoản đã bị khóa hoặc ngừng hoạt động');
+    }
+
+    const updatedUser = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    });
+    const tokens = await this.createTokensAndSession(updatedUser, ipAddress, deviceInfo);
+    return { user: this.sanitizeUser(updatedUser), ...tokens };
+  }
+
+  private async findUserByGoogleSubject(subject: string): Promise<User | null> {
+    const identity = await this.prisma.externalIdentity.findUnique({
+      where: {
+        provider_providerSubject: {
+          provider: IdentityProvider.GOOGLE,
+          providerSubject: subject,
+        },
+      },
+      include: { user: true },
+    });
+    return identity?.user || null;
+  }
+
+  private isUniqueConstraintError(error: unknown): boolean {
+    return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'P2002');
+  }
+
   // 5. Refresh Token Rotation
-  async refresh(refreshToken: string, ipAddress?: string, deviceInfo?: string): Promise<TokenResult> {
+  async refresh(
+    refreshToken: string,
+    ipAddress?: string,
+    deviceInfo?: string,
+  ): Promise<TokenResult> {
     try {
       this.jwtService.verify(refreshToken, {
         secret: this.jwtRefreshSecret,
@@ -244,7 +372,9 @@ export class AuthService {
         data: { revokedAt: new Date() },
       });
 
-      throw new UnauthorizedException('Phát hiện token đã bị thu hồi. Toàn bộ phiên đăng nhập đã bị hủy vì lý do bảo mật.');
+      throw new UnauthorizedException(
+        'Phát hiện token đã bị thu hồi. Toàn bộ phiên đăng nhập đã bị hủy vì lý do bảo mật.',
+      );
     }
 
     if (session.expiresAt < new Date()) {
@@ -309,6 +439,10 @@ export class AuthService {
       throw new NotFoundException('Người dùng không tồn tại');
     }
 
+    if (!user.passwordHash) {
+      throw new BadRequestException('Tài khoản Google chưa thiết lập mật khẩu cục bộ');
+    }
+
     const isMatch = await this.comparePassword(dto.oldPassword, user.passwordHash);
     if (!isMatch) {
       throw new BadRequestException('Mật khẩu hiện tại không chính xác');
@@ -328,7 +462,8 @@ export class AuthService {
 
   // 10. Quên mật khẩu (Production-Grade)
   async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
-    const genericMessage = 'Nếu email tồn tại trong hệ thống, hướng dẫn khôi phục sẽ được gửi tới hòm thư.';
+    const genericMessage =
+      'Nếu email tồn tại trong hệ thống, hướng dẫn khôi phục sẽ được gửi tới hòm thư.';
     const normalizedEmail = dto.email.toLowerCase().trim();
 
     const user = await this.prisma.user.findUnique({
@@ -444,7 +579,9 @@ export class AuthService {
       }),
     ]);
 
-    return { message: 'Mật khẩu đã được đặt lại thành công. Vui lòng đăng nhập lại với mật khẩu mới.' };
+    return {
+      message: 'Mật khẩu đã được đặt lại thành công. Vui lòng đăng nhập lại với mật khẩu mới.',
+    };
   }
 
   async updateUserRoleOrStatus(

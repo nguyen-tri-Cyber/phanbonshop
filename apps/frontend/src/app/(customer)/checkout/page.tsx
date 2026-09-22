@@ -36,15 +36,17 @@ import {
   getProvinces,
   getDistricts,
   getWards,
+  calculateShippingFee,
 } from '@phanbonshop/shared-utils';
-
-const FREE_SHIPPING_THRESHOLD = 1000000;
-const STANDARD_SHIPPING_FEE = 30000;
+import { GoogleSignInButton } from '../../../components/auth/google-sign-in-button';
 
 export default function CheckoutPage() {
+  const requireGoogleRegistration =
+    Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.trim()) ||
+    process.env.NEXT_PUBLIC_REQUIRE_GOOGLE_REGISTRATION === 'true';
   const router = useRouter();
   const { user, isLoading: isAuthLoading, login, register } = useAuth();
-  const { items, totalPrice, clearCart } = useCart();
+  const { items, totalPrice, clearCart, isLoading: isCartLoading, error: cartError } = useCart();
 
   // Auth Modal/Inline State for unauthenticated customers
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -160,7 +162,15 @@ export default function CheckoutPage() {
   // Calculate pricing breakdown
   const subtotal = totalPrice;
   const discountAmount = appliedCoupon ? appliedCoupon.discountAmount : 0;
-  const shippingFee = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : STANDARD_SHIPPING_FEE;
+  const shippingProvince =
+    selectedAddressId === 'new'
+      ? selectedProvinceCode
+      : addresses.find((address) => address.id === selectedAddressId)?.provinceCode || '';
+  const shippingFee = calculateShippingFee({
+    provinceCode: shippingProvince,
+    subtotal,
+    isFreeShippingCoupon: appliedCoupon?.isFreeShipping,
+  }).shippingFee;
   const finalTotal = Math.max(0, subtotal - discountAmount + shippingFee);
 
   // Validate Coupon handler
@@ -185,7 +195,7 @@ export default function CheckoutPage() {
       } else {
         const errorMsg = !res.success
           ? res.error.message
-          : (res.data.message || 'Mã giảm giá không hợp lệ');
+          : res.data.message || 'Mã giảm giá không hợp lệ';
         setCouponError(errorMsg);
         setAppliedCoupon(null);
       }
@@ -205,6 +215,7 @@ export default function CheckoutPage() {
 
   // Submit Order Checkout
   const handleCheckoutSubmit = async () => {
+    if (isSubmitting || isCartLoading || cartError) return;
     setCheckoutError(null);
 
     // Validate Items
@@ -325,8 +336,7 @@ export default function CheckoutPage() {
 
         // Nếu là thanh toán qua MoMo và có payUrl, chuyển hướng khách hàng sang cổng thanh toán MoMo
         const momoPayUrl =
-          res.data.payUrl ||
-          (res.data.paymentDetails as Record<string, unknown> | null)?.payUrl;
+          res.data.payUrl || (res.data.paymentDetails as Record<string, unknown> | null)?.payUrl;
 
         if (paymentMethod === 'MOMO' && typeof momoPayUrl === 'string' && momoPayUrl) {
           window.location.href = momoPayUrl;
@@ -338,17 +348,14 @@ export default function CheckoutPage() {
           `/checkout/thanh-cong?orderId=${res.data.orderId}&orderNumber=${res.data.orderNumber}`,
         );
       } else {
-        const errorMsg =
-          !res.success
-            ? res.error.message
-            : 'Không thể hoàn tất đặt hàng. Vui lòng kiểm tra lại thông tin tồn kho hoặc thử lại.';
+        const errorMsg = !res.success
+          ? res.error.message
+          : 'Không thể hoàn tất đặt hàng. Vui lòng kiểm tra lại thông tin tồn kho hoặc thử lại.';
         setCheckoutError(errorMsg);
       }
     } catch (err) {
       setCheckoutError(
-        err instanceof Error
-          ? err.message
-          : 'Lỗi kết nối máy chủ khi thực hiện thanh toán.',
+        err instanceof Error ? err.message : 'Lỗi kết nối máy chủ khi thực hiện thanh toán.',
       );
     } finally {
       setIsSubmitting(false);
@@ -356,7 +363,7 @@ export default function CheckoutPage() {
   };
 
   // 1. Loading State
-  if (isAuthLoading) {
+  if (isAuthLoading || isCartLoading) {
     return (
       <div className="max-w-6xl mx-auto px-4 py-12 space-y-6">
         <Skeleton className="h-8 w-64" />
@@ -382,7 +389,8 @@ export default function CheckoutPage() {
         </div>
         <h1 className="text-2xl font-black text-gray-900">Giỏ Hàng Đang Trống</h1>
         <p className="text-sm text-gray-500 max-w-md mx-auto">
-          Quý bà con chưa có sản phẩm phân bón nào trong giỏ hàng. Vui lòng chọn sản phẩm NPK, hữu cơ vi sinh phù hợp với mùa vụ trước khi tiến hành thanh toán.
+          Quý bà con chưa có sản phẩm phân bón nào trong giỏ hàng. Vui lòng chọn sản phẩm NPK, hữu
+          cơ vi sinh phù hợp với mùa vụ trước khi tiến hành thanh toán.
         </p>
         <div className="pt-4">
           <Link href="/san-pham">
@@ -407,27 +415,42 @@ export default function CheckoutPage() {
             </div>
             <h2 className="text-xl font-bold">Đăng Nhập Để Tiếp Tục Đặt Hàng</h2>
             <p className="text-xs text-primary-200 mt-1 max-w-md mx-auto">
-              Đăng nhập giúp lưu lịch sử đơn mùa vụ, tra cứu hành trình vận chuyển tận bờ ruộng và tích điểm hội viên nông nghiệp.
+              Đăng nhập giúp lưu lịch sử đơn mùa vụ, tra cứu hành trình vận chuyển tận bờ ruộng và
+              tích điểm hội viên nông nghiệp.
             </p>
           </div>
 
           <CardContent className="p-6">
+            <GoogleSignInButton mode="signin" onAuthenticated={() => undefined} />
+
+            {process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && (
+              <div className="my-5 flex items-center gap-3" aria-hidden="true">
+                <div className="h-px flex-1 bg-gray-200" />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                  hoặc dùng mật khẩu
+                </span>
+                <div className="h-px flex-1 bg-gray-200" />
+              </div>
+            )}
+
             {/* Mode Switcher */}
             <div className="flex border-b border-gray-200 mb-6">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('login');
-                  setAuthError(null);
-                }}
-                className={`flex-1 py-3 text-xs font-bold border-b-2 transition-colors ${
-                  authMode === 'login'
-                    ? 'border-primary-700 text-primary-700'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Đăng Nhập Có Sẵn
-              </button>
+              {!requireGoogleRegistration && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                  className={`flex-1 py-3 text-xs font-bold border-b-2 transition-colors ${
+                    authMode === 'login'
+                      ? 'border-primary-700 text-primary-700'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Đăng Nhập Có Sẵn
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -487,7 +510,7 @@ export default function CheckoutPage() {
                   {isAuthSubmitting ? 'Đang xác thực...' : 'Đăng Nhập & Tiếp Tục'}
                 </Button>
               </form>
-            ) : (
+            ) : !requireGoogleRegistration ? (
               <form onSubmit={handleQuickRegister} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
@@ -552,7 +575,7 @@ export default function CheckoutPage() {
                   {isAuthSubmitting ? 'Đang tạo tài khoản...' : 'Đăng Ký & Đặt Hàng'}
                 </Button>
               </form>
-            )}
+            ) : null}
           </CardContent>
         </Card>
       </div>
@@ -621,9 +644,7 @@ export default function CheckoutPage() {
               {/* Existing Saved Addresses Selection */}
               {addresses.length > 0 && (
                 <div className="space-y-2.5">
-                  <div className="text-xs font-bold text-gray-700">
-                    Chọn từ sổ địa chỉ đã lưu:
-                  </div>
+                  <div className="text-xs font-bold text-gray-700">Chọn từ sổ địa chỉ đã lưu:</div>
                   <div className="grid grid-cols-1 gap-2.5">
                     {addresses.map((addr) => (
                       <label
@@ -643,13 +664,9 @@ export default function CheckoutPage() {
                         />
                         <div className="flex-1 min-w-0 text-xs">
                           <div className="flex items-center space-x-2">
-                            <span className="font-bold text-gray-900">
-                              {addr.recipientName}
-                            </span>
+                            <span className="font-bold text-gray-900">{addr.recipientName}</span>
                             <span className="text-gray-400">|</span>
-                            <span className="font-semibold text-gray-700">
-                              {addr.phone}
-                            </span>
+                            <span className="font-semibold text-gray-700">{addr.phone}</span>
                             {addr.isDefault && (
                               <Badge variant="default" className="text-[10px] bg-primary-700">
                                 Mặc định
@@ -851,7 +868,8 @@ export default function CheckoutPage() {
                     </Badge>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-1">
-                    Bà con được đồng kiểm bao bì, tem chống hàng giả và số lượng phân bón trước khi thanh toán tiền mặt cho tài xế giao hàng.
+                    Bà con được đồng kiểm bao bì, tem chống hàng giả và số lượng phân bón trước khi
+                    thanh toán tiền mặt cho tài xế giao hàng.
                   </p>
                 </div>
               </label>
@@ -882,7 +900,8 @@ export default function CheckoutPage() {
                     </Badge>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-1">
-                    Quét mã QR chuẩn VietQR qua ứng dụng bất kỳ ngân hàng nào. Hệ thống tự động khớp mã đơn và cập nhật trạng thái đơn hàng.
+                    Quét mã QR chuẩn VietQR qua ứng dụng bất kỳ ngân hàng nào. Hệ thống tự động khớp
+                    mã đơn và cập nhật trạng thái đơn hàng.
                   </p>
                 </div>
               </label>
@@ -913,7 +932,8 @@ export default function CheckoutPage() {
                     </Badge>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-1">
-                    Thanh toán an toàn qua Ví MoMo bằng cách quét mã QR hoặc chuyển hướng sang cổng thanh toán trực tuyến MoMo.
+                    Thanh toán an toàn qua Ví MoMo bằng cách quét mã QR hoặc chuyển hướng sang cổng
+                    thanh toán trực tuyến MoMo.
                   </p>
                 </div>
               </label>
@@ -957,11 +977,12 @@ export default function CheckoutPage() {
               {/* Product Items List */}
               <div className="max-h-60 overflow-y-auto space-y-3 pr-1 divide-y divide-gray-100">
                 {items.map((item) => (
-                  <div key={item.variantId} className="pt-2 first:pt-0 flex items-start justify-between text-xs">
+                  <div
+                    key={item.variantId}
+                    className="pt-2 first:pt-0 flex items-start justify-between text-xs"
+                  >
                     <div className="flex-1 pr-3 min-w-0">
-                      <h4 className="font-semibold text-gray-900 truncate">
-                        {item.productName}
-                      </h4>
+                      <h4 className="font-semibold text-gray-900 truncate">{item.productName}</h4>
                       <p className="text-gray-500 text-[11px]">
                         Quy cách: {item.packageSize} &bull; SL: {item.quantity}
                       </p>
@@ -1032,40 +1053,40 @@ export default function CheckoutPage() {
               <div className="pt-3 border-t border-gray-100 space-y-2 text-xs">
                 <div className="flex justify-between text-gray-600">
                   <span>Tạm tính tiền hàng:</span>
-                  <span className="font-semibold text-gray-900">
-                    {formatCurrencyVND(subtotal)}
-                  </span>
+                  <span className="font-semibold text-gray-900">{formatCurrencyVND(subtotal)}</span>
                 </div>
 
                 {appliedCoupon && (
                   <div className="flex justify-between text-emerald-700">
                     <span>Mã giảm giá ({appliedCoupon.code}):</span>
-                    <span className="font-bold">
-                      -{formatCurrencyVND(discountAmount)}
-                    </span>
+                    <span className="font-bold">-{formatCurrencyVND(discountAmount)}</span>
                   </div>
                 )}
 
                 <div className="flex justify-between text-gray-600 items-center">
                   <div className="flex items-center space-x-1">
                     <span>Phí vận chuyển:</span>
-                    {subtotal >= FREE_SHIPPING_THRESHOLD && (
+                    {shippingFee === 0 && (
                       <Badge variant="default" className="text-[10px] bg-emerald-600">
                         Freeship
                       </Badge>
                     )}
                   </div>
                   <span className="font-semibold text-gray-900">
-                    {shippingFee === 0 ? 'Miễn phí' : formatCurrencyVND(shippingFee)}
+                    {!shippingProvince
+                      ? 'Chọn tỉnh/thành để tính phí'
+                      : shippingFee === 0
+                        ? 'Miễn phí'
+                        : formatCurrencyVND(shippingFee)}
                   </span>
                 </div>
 
                 <div className="pt-3 border-t border-gray-200 flex justify-between items-baseline">
                   <span className="text-sm font-bold text-gray-900">
-                    Tổng cộng thanh toán:
+                    {shippingProvince ? 'Tổng cộng thanh toán:' : 'Tổng tạm tính:'}
                   </span>
                   <span className="text-xl font-black text-primary-800">
-                    {formatCurrencyVND(finalTotal)}
+                    {formatCurrencyVND(shippingProvince ? finalTotal : subtotal - discountAmount)}
                   </span>
                 </div>
                 <p className="text-[11px] text-gray-400 text-right">
@@ -1075,9 +1096,14 @@ export default function CheckoutPage() {
 
               {/* Submission Button */}
               <div className="pt-2">
+                {cartError && (
+                  <p role="alert" className="mb-3 text-sm text-red-700">
+                    {cartError} Vui lòng mở giỏ hàng và thử đồng bộ lại.
+                  </p>
+                )}
                 <Button
                   onClick={handleCheckoutSubmit}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isCartLoading || Boolean(cartError)}
                   className="w-full justify-center py-3 text-sm font-black tracking-wide space-x-2 shadow-md hover:shadow-lg transition-all"
                 >
                   {isSubmitting ? (

@@ -18,6 +18,9 @@ export function CartDrawer() {
     clearCart,
     totalPrice,
     totalItems,
+    error,
+    refreshCart,
+    isLoading,
   } = useCart();
 
   if (!isOpen) return null;
@@ -50,21 +53,30 @@ export function CartDrawer() {
 
           {/* Drawer Body */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+            {error && (
+              <div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                <p>{error}</p>
+                <button
+                  type="button"
+                  disabled={isLoading}
+                  onClick={refreshCart}
+                  className="mt-2 underline"
+                >
+                  Thử đồng bộ lại
+                </button>
+              </div>
+            )}
             {items.length === 0 ? (
               <div className="py-16 text-center flex flex-col items-center justify-center space-y-3">
                 <div className="h-16 w-16 rounded-full bg-gray-100 flex items-center justify-center text-gray-400">
                   <ShoppingBag className="h-8 w-8" />
                 </div>
-                <h3 className="text-base font-medium text-gray-900">
-                  Giỏ hàng chưa có sản phẩm
-                </h3>
+                <h3 className="text-base font-medium text-gray-900">Giỏ hàng chưa có sản phẩm</h3>
                 <p className="text-xs text-gray-500 max-w-xs">
-                  Hãy khám phá các loại phân bón NPK, hữu cơ vi sinh chất lượng cao cho mùa vụ của bạn.
+                  Hãy khám phá các loại phân bón NPK, hữu cơ vi sinh chất lượng cao cho mùa vụ của
+                  bạn.
                 </p>
-                <Button
-                  onClick={() => setIsOpen(false)}
-                  className="mt-2 text-xs"
-                >
+                <Button onClick={() => setIsOpen(false)} className="mt-2 text-xs">
                   Mua sắm ngay
                 </Button>
               </div>
@@ -135,7 +147,9 @@ export function CartDrawer() {
               </div>
               <div className="rounded-md bg-amber-50 p-2.5 border border-amber-200">
                 <p className="text-[11px] text-amber-800 leading-tight">
-                  <span className="font-semibold">Lưu ý giá:</span> Giá hiển thị ở giỏ hàng là tạm tính. Giá và tồn kho khả dụng thực tế sẽ được hệ thống máy chủ kiểm tra và xác nhận chính thức tại bước Đặt hàng.
+                  <span className="font-semibold">Lưu ý giá:</span> Giá hiển thị ở giỏ hàng là tạm
+                  tính. Giá và tồn kho khả dụng thực tế sẽ được hệ thống máy chủ kiểm tra và xác
+                  nhận chính thức tại bước Đặt hàng.
                 </p>
               </div>
               <div className="space-y-2 pt-1">

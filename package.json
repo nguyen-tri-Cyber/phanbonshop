@@ -23,6 +23,7 @@
     "test": "npm run --workspaces --if-present test && node scripts/test-backup-restore.mjs && node scripts/test-production-hardening.mjs",
     "test:integration": "npm run --workspace=@phanbonshop/auth-service test:integration && npm run --workspace=@phanbonshop/inventory-service test:integration && npm run --workspace=@phanbonshop/order-service test:integration",
     "test:backup": "node scripts/test-backup-restore.mjs",
+    "test:local:cod": "node scripts/test-local-cod.mjs",
     "test:hardening": "node scripts/test-production-hardening.mjs",
     "test:payment": "node services/order-service/test/payment.architecture.test.mjs",
     "test:momo": "node services/order-service/test/momo.sandbox.test.mjs",

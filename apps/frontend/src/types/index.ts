@@ -353,6 +353,7 @@ export interface CheckoutResult {
 }
 
 export interface CouponValidationResult {
+  isFreeShipping?: boolean;
   valid: boolean;
   couponId?: string;
   code: string;
@@ -364,5 +365,4 @@ export interface CouponValidationResult {
   minOrderValue?: number | null;
   message?: string;
 }
-
 

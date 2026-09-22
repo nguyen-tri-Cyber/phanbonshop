@@ -1,13 +1,4 @@
-import {
-  Controller,
-  Post,
-  Get,
-  Body,
-  UseGuards,
-  Req,
-  Ip,
-  Headers,
-} from '@nestjs/common';
+import { Controller, Post, Get, Body, UseGuards, Req, Ip, Headers } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Request } from 'express';
@@ -17,6 +8,7 @@ import { LoginDto } from './dto/login.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/reset-password.dto.js';
+import { GoogleLoginDto } from './dto/google-login.dto.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
 import { Roles } from './decorators/roles.decorator.js';
@@ -50,6 +42,18 @@ export class AuthController {
     return this.authService.login(dto, ipAddress, userAgent);
   }
 
+  @Post('google')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({ summary: 'Đăng ký hoặc đăng nhập bằng tài khoản Gmail đã xác minh' })
+  @ApiResponse({ status: 200, description: 'Xác thực Google thành công' })
+  async loginWithGoogle(
+    @Body() dto: GoogleLoginDto,
+    @Ip() ipAddress: string,
+    @Headers('user-agent') userAgent?: string,
+  ): Promise<{ user: UserResponse } & TokenResult> {
+    return this.authService.loginWithGoogle(dto, ipAddress, userAgent);
+  }
+
   @Post('refresh')
   @ApiOperation({ summary: 'Làm mới Access Token thông qua Refresh Token Rotation' })
   @ApiResponse({ status: 200, description: 'Cấp phát token mới thành công' })
@@ -66,10 +70,7 @@ export class AuthController {
   @Post('logout')
   @ApiOperation({ summary: 'Đăng xuất và thu hồi Refresh Token hiện tại' })
   @ApiResponse({ status: 200, description: 'Đăng xuất thành công' })
-  async logout(
-    @Body() dto: RefreshTokenDto,
-    @Req() req: Request,
-  ): Promise<{ message: string }> {
+  async logout(@Body() dto: RefreshTokenDto, @Req() req: Request): Promise<{ message: string }> {
     const token = dto.refreshToken || req.cookies?.refresh_token;
     return this.authService.logout(token);
   }
@@ -124,7 +125,10 @@ export class AuthController {
   @ApiOperation({ summary: 'Endpoint mẫu chỉ dành riêng cho ADMIN và SUPER_ADMIN' })
   @ApiResponse({ status: 200, description: 'Quyền quản trị viên hợp lệ' })
   @ApiResponse({ status: 403, description: 'Từ chối truy cập (Forbidden)' })
-  adminOnlySample(@CurrentUser() user: AuthenticatedUser): { message: string; user: AuthenticatedUser } {
+  adminOnlySample(@CurrentUser() user: AuthenticatedUser): {
+    message: string;
+    user: AuthenticatedUser;
+  } {
     return {
       message: 'Xin chào Quản trị viên, bạn có toàn quyền truy cập khu vực này!',
       user,

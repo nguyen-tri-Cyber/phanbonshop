@@ -388,3 +388,143 @@ describe('manual payment confirmation concurrency', () => {
     assert.equal(auditCreates, 1);
   });
 });
+
+describe('payment confirmation guards against cancelled and invalid orders', () => {
+  test('rejects confirmPayment when order is CANCELLED (e.g. COD order cancelled by customer)', async () => {
+    const order = {
+      id: 'order-cancelled',
+      orderNumber: 'DH-20260920-CANCELLED',
+      customerId: 'user-a',
+      status: 'CANCELLED',
+      paymentStatus: PaymentStatus.CANCELLED,
+      reservationId: 'res-cancelled',
+      items: [{ variantId: 'var-1' }],
+    };
+    const payment = {
+      id: 'payment-cancelled',
+      orderId: order.id,
+      provider: 'COD',
+      method: PaymentMethod.COD,
+      amount: 500000,
+      status: PaymentStatus.PENDING,
+      transactionReference: null,
+      order,
+      transactions: [],
+      auditLogs: [],
+    };
+    const prisma = {
+      paymentRecord: {
+        findUnique: async () => payment,
+        findFirst: async () => payment,
+      },
+      order: {
+        findUnique: async () => order,
+      },
+    };
+    configureMomo();
+    const service = new PaymentsService(
+      prisma,
+      new CodPaymentProvider(),
+      new BankTransferPaymentProvider(),
+      new MomoPaymentProvider(),
+      { createTask: async () => ({ id: 'task' }) },
+    );
+
+    await assert.rejects(
+      service.confirmPayment('payment-cancelled', 'admin@example.test', 'ADMIN', {}),
+      /Không thể xác nhận thanh toán cho đơn hàng đã bị hủy/,
+    );
+  });
+
+  test('rejects confirmPayment when payment itself is CANCELLED', async () => {
+    const order = {
+      id: 'order-valid-but-payment-cancelled',
+      orderNumber: 'DH-20260920-PAYCANCEL',
+      customerId: 'user-a',
+      status: 'PENDING',
+      paymentStatus: PaymentStatus.CANCELLED,
+      reservationId: 'res-paycancel',
+      items: [],
+    };
+    const payment = {
+      id: 'payment-is-cancelled',
+      orderId: order.id,
+      provider: 'COD',
+      method: PaymentMethod.COD,
+      amount: 500000,
+      status: PaymentStatus.CANCELLED,
+      transactionReference: null,
+      order,
+      transactions: [],
+      auditLogs: [],
+    };
+    const prisma = {
+      paymentRecord: {
+        findUnique: async () => payment,
+        findFirst: async () => payment,
+      },
+      order: {
+        findUnique: async () => order,
+      },
+    };
+    configureMomo();
+    const service = new PaymentsService(
+      prisma,
+      new CodPaymentProvider(),
+      new BankTransferPaymentProvider(),
+      new MomoPaymentProvider(),
+      { createTask: async () => ({ id: 'task' }) },
+    );
+
+    await assert.rejects(
+      service.confirmPayment('payment-is-cancelled', 'admin@example.test', 'ADMIN', {}),
+      /đã bị hủy và không thể xác nhận thành công/,
+    );
+  });
+
+  test('rejects confirmPayment when order is RETURNED or REFUNDED', async () => {
+    const order = {
+      id: 'order-refunded',
+      orderNumber: 'DH-20260920-REFUNDED',
+      customerId: 'user-a',
+      status: 'REFUNDED',
+      paymentStatus: PaymentStatus.PAID,
+      reservationId: null,
+      items: [],
+    };
+    const payment = {
+      id: 'payment-refunded',
+      orderId: order.id,
+      provider: 'BANK_TRANSFER',
+      method: PaymentMethod.BANK_TRANSFER,
+      amount: 500000,
+      status: PaymentStatus.PENDING,
+      transactionReference: null,
+      order,
+      transactions: [],
+      auditLogs: [],
+    };
+    const prisma = {
+      paymentRecord: {
+        findUnique: async () => payment,
+        findFirst: async () => payment,
+      },
+      order: {
+        findUnique: async () => order,
+      },
+    };
+    configureMomo();
+    const service = new PaymentsService(
+      prisma,
+      new CodPaymentProvider(),
+      new BankTransferPaymentProvider(),
+      new MomoPaymentProvider(),
+      { createTask: async () => ({ id: 'task' }) },
+    );
+
+    await assert.rejects(
+      service.confirmPayment('payment-refunded', 'admin@example.test', 'ADMIN', {}),
+      /Không thể xác nhận thanh toán cho đơn hàng ở trạng thái REFUNDED/,
+    );
+  });
+});

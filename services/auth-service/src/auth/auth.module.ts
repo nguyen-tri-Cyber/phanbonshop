@@ -8,6 +8,7 @@ import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { EmailModule } from '../email/email.module.js';
+import { GoogleIdentityVerifier } from '../google/google-identity.verifier.js';
 
 @Module({
   imports: [
@@ -21,7 +22,7 @@ import { EmailModule } from '../email/email.module.js';
     ThrottlerModule.forRoot([
       {
         ttl: 60000, // 60 giây
-        limit: 30,  // Mặc định 30 requests / phút
+        limit: 30, // Mặc định 30 requests / phút
       },
     ]),
     EmailModule,
@@ -30,6 +31,10 @@ import { EmailModule } from '../email/email.module.js';
   providers: [
     AuthService,
     JwtStrategy,
+    {
+      provide: GoogleIdentityVerifier,
+      useFactory: () => new GoogleIdentityVerifier(),
+    },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Package, RefreshCw, ExternalLink, Sparkles } from 'lucide-react';
+import { Package, RefreshCw, ExternalLink, Sparkles, Plus } from 'lucide-react';
 import { apiClient } from '../../../lib/api-client';
 import { Product } from '../../../types/index';
 import { formatCurrencyVND } from '../../../lib/formatters';
@@ -18,11 +18,13 @@ import {
   TableHead,
   TableCell,
 } from '../../../components/ui/table';
+import CreateProductModal from './create-product-modal';
 
 export default function AdminProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [total, setTotal] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
 
   const loadProducts = async () => {
     setIsLoading(true);
@@ -59,16 +61,27 @@ export default function AdminProductsPage() {
           </p>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={loadProducts}
-          disabled={isLoading}
-          className="space-x-1.5 text-xs"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-          <span>Làm mới</span>
-        </Button>
+        <div className="flex items-center space-x-2.5">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={loadProducts}
+            disabled={isLoading}
+            className="space-x-1.5 text-xs"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Làm mới</span>
+          </Button>
+
+          <Button
+            size="sm"
+            onClick={() => setIsCreateModalOpen(true)}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white space-x-1.5 text-xs shadow-sm font-semibold"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Thêm Sản Phẩm Mới</span>
+          </Button>
+        </div>
       </div>
 
       <Card className="shadow-sm">
@@ -138,6 +151,13 @@ export default function AdminProductsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Modal Thêm Sản Phẩm Mới */}
+      <CreateProductModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={loadProducts}
+      />
     </div>
   );
 }

@@ -509,17 +509,25 @@ export class InventoryService implements OnModuleInit, OnModuleDestroy {
       data: { status: ReservationStatus.RELEASED },
     });
 
+    const isReturn = Boolean(
+      reason && (reason.includes('trả hàng') || reason.includes('RETURN') || reason.includes('RETURNED')),
+    );
+
     await tx.inventoryMovement.create({
       data: {
         productId: inv.productId,
         variantId: reservation.variantId,
-        type: MovementType.CANCELLED_ORDER,
+        type: isReturn ? MovementType.RETURN : MovementType.CANCELLED_ORDER,
         quantity: reservation.quantity,
         stockBefore: inv.stockQuantity,
         stockAfter: newStock,
         reservedBefore: inv.reservedQuantity,
         reservedAfter: inv.reservedQuantity,
-        reason: reason || `Hủy đơn hàng và hoàn tồn kho thực tế cho reservation ${reservation.reservationId}`,
+        reason:
+          reason ||
+          (isReturn
+            ? `Nhận hàng trả lại và hoàn tồn kho thực tế cho reservation ${reservation.reservationId}`
+            : `Hủy đơn hàng và hoàn tồn kho thực tế cho reservation ${reservation.reservationId}`),
         referenceType: reservation.referenceType,
         referenceId: reservation.referenceId,
         requestId: requestId || null,

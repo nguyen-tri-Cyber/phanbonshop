@@ -99,7 +99,9 @@ stateDiagram-v2
 | **Đang xử lý / Đóng gói / Giao** (`PROCESSING`, `PACKING`, `SHIPPED`, `DELIVERED`, `COMPLETED`) | Đã xuất kho từ bước `CONFIRMED` | `COMMITTED` | `0` | `0` | `0` | *(Không ghi nhận thêm)* |
 | **Hủy đơn khi đang `PENDING`** | `POST /internal/v1/inventory/release` | `RELEASED` | `0` | **`-Q`** | **`+Q`** | `RELEASE_RESERVATION` |
 | **Hủy đơn sau `CONFIRMED` / `PACKING`** | `POST /internal/v1/inventory/rollback` | `RELEASED` | **`+Q`** | `0` | **`+Q`** | `CANCELLED_ORDER` |
+| **Trả hàng** (`RETURNED`) | `POST /internal/v1/inventory/release` (allowRollback: true) → `executeRollbackCommitted` | `RELEASED` | **`+Q`** | `0` | **`+Q`** | `RETURN` |
 | **Hết hạn 15 phút không thanh toán / xác nhận** | `POST /internal/v1/inventory/cleanup-expired` (Worker tự động) | `EXPIRED` | `0` | **`-Q`** | **`+Q`** | `RELEASE_RESERVATION` |
+| **Thêm sản phẩm mới (Admin)** | `POST /api/v1/inventory/adjust` (Frontend orchestrator) | *(Không liên quan Reservation)* | **`+Q`** | `0` | **`+Q`** | `INITIAL_STOCK` |
 
 ---
 
